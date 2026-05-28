@@ -15,30 +15,29 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# CRM column mapping (1-indexed, B=2)
 COL = {
-    "username":      2,   # B
-    "name":          3,   # C
-    "sales_account": 4,   # D
-    "first_contact": 5,   # E
-    "dialog":        6,   # F
-    "offer":         7,   # G
-    "trial":         8,   # H
-    "subscribed":    9,   # I
-    "status":        10,  # J
-    "connected_at":  11,  # K
-    "tariff_days":   12,  # L
-    "expires_at":    13,  # M
-    "payment_lari":  14,  # N
-    "payment_rub":   15,  # O
-    "city_topic":    16,  # P
-    "comment":       17,  # Q
-    "chat_id":       18,  # R
+    "username":      2,
+    "name":          3,
+    "sales_account": 4,
+    "first_contact": 5,
+    "dialog":        6,
+    "offer":         7,
+    "trial":         8,
+    "subscribed":    9,
+    "status":        10,
+    "connected_at":  11,
+    "tariff_days":   12,
+    "expires_at":    13,
+    "payment_lari":  14,
+    "payment_rub":   15,
+    "city_topic":    16,
+    "comment":       17,
+    "chat_id":       18,
 }
 
-HIST_COL_USERNAME  = 1   # A
-HIST_COL_CHAT_ID   = 2   # B
-HIST_DATA_START    = 3   # сообщения начинаются с C
+HIST_COL_USERNAME = 1
+HIST_COL_CHAT_ID  = 2
+HIST_DATA_START   = 3
 
 STATUS_ACTIVE       = "✅ Активен"
 STATUS_TRIAL        = "🔵 Триал"
@@ -52,8 +51,8 @@ class SheetsClient:
         creds_dict = json.loads(Config.GOOGLE_CREDENTIALS_JSON)
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         self.gc = gspread.authorize(creds)
-        self.sheet_id = Config.GOOGLE_SHEET_ID
-        self._crm_sheet = None
+        self.sheet_id    = Config.GOOGLE_SHEET_ID
+        self._crm_sheet  = None
         self._hist_sheet = None
 
     # ------------------------------------------------------------------ #
@@ -78,7 +77,7 @@ class SheetsClient:
                     title=Config.HISTORY_SHEET_NAME, rows=1000, cols=500
                 )
                 self._hist_sheet.update("A1:B1", [["Username", "Chat ID"]])
-                logger.info(f"Created sheet '{Config.HISTORY_SHEET_NAME}'")
+                logger.info(f"Создан лист истории диалогов: «{Config.HISTORY_SHEET_NAME}»")
         return self._hist_sheet
 
     # ------------------------------------------------------------------ #
@@ -89,9 +88,7 @@ class SheetsClient:
         try:
             cell = self.crm.find(username, in_column=COL["username"])
             return cell.row
-        except gspread.CellNotFound:
-            return None
-        except Exception:
+        except (gspread.CellNotFound, Exception):
             return None
 
     def _crm_next_row(self) -> int:
@@ -127,7 +124,7 @@ class SheetsClient:
     ):
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            row = self._crm_find_row(username)
+            row   = self._crm_find_row(username)
             is_new = row is None
 
             if is_new:
@@ -151,27 +148,21 @@ class SheetsClient:
                     "city_topic":    city_topic,
                     "comment":       comment,
                 }
+                logger.info(f"📝 CRM: добавлен новый контакт {username}")
             else:
-                updates = {}
-                for key, val in {
-                    "chat_id":       chat_id,
-                    "name":          name,
-                    "sales_account": sales_account,
-                    "dialog":        dialog,
-                    "offer":         offer,
-                    "trial":         trial,
-                    "subscribed":    subscribed,
-                    "status":        status,
-                    "connected_at":  connected_at,
-                    "tariff_days":   tariff_days,
-                    "expires_at":    expires_at,
-                    "payment_lari":  payment_lari,
-                    "payment_rub":   payment_rub,
-                    "city_topic":    city_topic,
-                    "comment":       comment,
-                }.items():
-                    if val:
-                        updates[key] = val
+                updates = {
+                    k: v for k, v in {
+                        "chat_id": chat_id, "name": name,
+                        "sales_account": sales_account, "dialog": dialog,
+                        "offer": offer, "trial": trial,
+                        "subscribed": subscribed, "status": status,
+                        "connected_at": connected_at, "tariff_days": tariff_days,
+                        "expires_at": expires_at, "payment_lari": payment_lari,
+                        "payment_rub": payment_rub, "city_topic": city_topic,
+                        "comment": comment,
+                    }.items() if v
+                }
+                logger.info(f"📝 CRM: обновлён {username} — {list(updates.keys())}")
 
             cells = [
                 gspread.Cell(row, COL[field], value)
@@ -180,10 +171,9 @@ class SheetsClient:
             ]
             if cells:
                 self.crm.update_cells(cells, value_input_option="USER_ENTERED")
-            logger.info(f"CRM {'created' if is_new else 'updated'}: {username}")
 
         except Exception as e:
-            logger.error(f"CRM upsert error for {username}: {e}")
+            logger.error(f"Не удалось сохранить {username} в CRM: {e}")
 
     def mark_trial_started(self, username: str):
         today     = datetime.now().strftime("%Y-%m-%d")
@@ -196,6 +186,7 @@ class SheetsClient:
             tariff_days="3",
             expires_at=trial_end,
         )
+        logger.info(f"🔵 Триал запущен для {username}, истекает {trial_end}")
 
     # ------------------------------------------------------------------ #
     # CRM: экспирация                                                      #
@@ -231,10 +222,12 @@ class SheetsClient:
                 except ValueError:
                     continue
 
+            if results:
+                logger.info(f"📅 Найдено клиентов с истекающим доступом через {days_ahead} дн.: {len(results)}")
             return results
 
         except Exception as e:
-            logger.error(f"get_expiring_clients error: {e}")
+            logger.error(f"Ошибка при проверке истекающих подписок: {e}")
             return []
 
     # ------------------------------------------------------------------ #
@@ -245,9 +238,7 @@ class SheetsClient:
         try:
             cell = self.hist.find(str(chat_id), in_column=HIST_COL_CHAT_ID)
             return cell.row
-        except gspread.CellNotFound:
-            return None
-        except Exception:
+        except (gspread.CellNotFound, Exception):
             return None
 
     def _hist_next_row(self) -> int:
@@ -259,8 +250,7 @@ class SheetsClient:
 
     def _hist_next_msg_col(self, row: int) -> int:
         row_values = self.hist.row_values(row)
-        filled     = len(row_values)
-        return max(filled + 1, HIST_DATA_START)
+        return max(len(row_values) + 1, HIST_DATA_START)
 
     def history_ensure_client(self, username: str, chat_id: int):
         try:
@@ -269,31 +259,29 @@ class SheetsClient:
                 row = self._hist_next_row()
                 self.hist.update_cell(row, HIST_COL_USERNAME, username)
                 self.hist.update_cell(row, HIST_COL_CHAT_ID,  str(chat_id))
-                logger.info(f"History row created for {username} ({chat_id})")
+                logger.info(f"📖 История: создана строка для {username}")
         except Exception as e:
-            logger.error(f"history_ensure_client error: {e}")
+            logger.error(f"Не удалось создать строку истории для {username}: {e}")
 
     def history_append_message(self, chat_id: int, role: str, text: str):
         try:
             row = self._hist_find_row(chat_id)
             if row is None:
-                logger.warning(f"No history row for chat_id={chat_id}, skipping")
+                logger.warning(f"История не найдена для chat_id={chat_id}, пропускаем запись")
                 return
             col        = self._hist_next_msg_col(row)
             ts         = datetime.now().strftime("%H:%M")
             cell_value = f"[{ts}] {role}: {text[:500]}"
             self.hist.update_cell(row, col, cell_value)
         except Exception as e:
-            logger.error(f"history_append_message error: {e}")
+            logger.error(f"Не удалось записать сообщение в историю (chat_id={chat_id}): {e}")
 
     def history_get_client_chat_id(self, username: str) -> Optional[int]:
         try:
             cell        = self.hist.find(username, in_column=HIST_COL_USERNAME)
             chat_id_str = self.hist.cell(cell.row, HIST_COL_CHAT_ID).value
             return int(chat_id_str) if chat_id_str else None
-        except gspread.CellNotFound:
-            return None
-        except Exception:
+        except (gspread.CellNotFound, Exception):
             return None
 
 
