@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+import base64
 
 load_dotenv()
 
@@ -15,7 +16,10 @@ class Config:
 
     # Google Sheets
     GOOGLE_SHEET_ID: str = os.environ["GOOGLE_SHEET_ID"]
-    GOOGLE_CREDENTIALS_JSON: str = os.environ["GOOGLE_CREDENTIALS_JSON"]
+    GOOGLE_CREDENTIALS_B64: str = os.environ["GOOGLE_CREDENTIALS_B64"]
+    GOOGLE_CREDENTIALS_JSON: str = base64.b64decode(
+        GOOGLE_CREDENTIALS_B64
+    ).decode("utf-8")
 
     # Sheet names
     CRM_SHEET_NAME: str = "👥 CRM клиентов"
