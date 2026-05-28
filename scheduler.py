@@ -139,5 +139,3 @@ def start_scheduler(application: Application):
     )
     scheduler.start()
     logger.info(f"⏱  Планировщик запущен — проверка каждый день в {Config.SCHEDULER_HOUR}:00 UTC")
-
-exit code 0
