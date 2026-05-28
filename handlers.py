@@ -21,10 +21,6 @@ def _get_username(user) -> str:
 
 
 def _typing_delay(text: str) -> float:
-    """
-    Имитирует живую печать: базовая задержка 4-8 сек +
-    0.03 сек на каждый символ (но не больше 18 сек итого).
-    """
     base    = random.uniform(4.0, 8.0)
     per_chr = len(text) * 0.03
     return min(base + per_chr, 18.0)
@@ -42,8 +38,9 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _registered.add(user.id)
         sheets.upsert_client(username, chat_id=str(user.id), name=user.full_name or "")
         sheets.history_ensure_client(username, user.id)
-
-    logger.info(f"/start from {username}")
+        logger.info(f"Новый контакт написал /start: {username}")
+    else:
+        logger.info(f"{username} снова нажал /start")
 
 
 # ------------------------------------------------------------------ #
@@ -62,9 +59,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id == Config.OWNER_CHAT_ID:
         return
 
-    logger.info(f"[DIRECT] ← {username}: {text[:80]}")
-
-    if user_id not in _registered:
+    is_new = user_id not in _registered
+    if is_new:
         _registered.add(user_id)
         sheets.upsert_client(
             username,
@@ -74,31 +70,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dialog="Да",
         )
         sheets.history_ensure_client(username, user_id)
+        logger.info(f"━━━ Новый риэлтор написал напрямую: {username} ━━━")
+    else:
+        logger.info(f"💬 {username} пишет: {text[:80]}")
 
     sheets.history_append_message(user_id, "👤", text)
 
     try:
         reply, needs_takeover, trial_link_sent = await gemini.chat(user_id, text)
     except Exception as e:
-        logger.error(f"Gemini error for {username}: {e}")
+        logger.error(f"Gemini не ответил для {username}: {e}")
         return
 
     delay = _typing_delay(reply)
-    logger.info(f"[DIRECT] typing delay {delay:.1f}s for {username}")
+    logger.info(f"⏳ Имитируем печать {delay:.1f} сек перед ответом {username}...")
     await asyncio.sleep(delay)
 
     await update.message.reply_text(reply)
-    logger.info(f"[DIRECT] → {username}: {reply[:80]}")
+    logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
 
     sheets.history_append_message(user_id, "🤖", reply)
     _update_crm_stage(user_id, username, reply, trial_link_sent)
 
     if needs_takeover:
+        logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
         await _notify_owner_takeover(context, username, text, reply)
 
 
 # ------------------------------------------------------------------ #
-# Сообщения через Secretary Mode (business_message)                    #
+# Сообщения через Secretary Mode                                       #
 # ------------------------------------------------------------------ #
 
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,12 +119,11 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
 
     business_connection_id = msg.business_connection_id
     if not business_connection_id:
-        logger.warning(f"business_connection_id отсутствует у {username}, пропускаем")
+        logger.warning(f"Нет business_connection_id для {username}, пропускаем")
         return
 
-    logger.info(f"[BUSINESS] ← {username}: {text[:80]}")
-
-    if user_id not in _registered:
+    is_new = user_id not in _registered
+    if is_new:
         _registered.add(user_id)
         sheets.upsert_client(
             username,
@@ -134,17 +133,20 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
             dialog="Да",
         )
         sheets.history_ensure_client(username, user_id)
+        logger.info(f"━━━ Новый риэлтор написал через чат: {username} ━━━")
+    else:
+        logger.info(f"💬 {username} пишет: {text[:80]}")
 
     sheets.history_append_message(user_id, "👤", text)
 
     try:
         reply, needs_takeover, trial_link_sent = await gemini.chat(user_id, text)
     except Exception as e:
-        logger.error(f"Gemini error for {username}: {e}")
+        logger.error(f"Gemini не ответил для {username}: {e}")
         return
 
     delay = _typing_delay(reply)
-    logger.info(f"[BUSINESS] typing delay {delay:.1f}s for {username}")
+    logger.info(f"⏳ Имитируем печать {delay:.1f} сек перед ответом {username}...")
 
     try:
         await context.bot.send_chat_action(
@@ -164,15 +166,16 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
             business_connection_id=business_connection_id,
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки business_message для {username}: {e}")
+        logger.error(f"Не удалось отправить ответ {username}: {e}")
         return
 
-    logger.info(f"[BUSINESS] → {username}: {reply[:80]}")
+    logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
 
     sheets.history_append_message(user_id, "🤖", reply)
     _update_crm_stage(user_id, username, reply, trial_link_sent)
 
     if needs_takeover:
+        logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
         await _notify_owner_takeover(context, username, text, reply)
 
 
@@ -187,11 +190,12 @@ def _update_crm_stage(user_id: int, username: str, reply: str, trial_link_sent: 
         if "лид-витрин" in reply_lower or "триал" in reply_lower or "бесплатн" in reply_lower:
             _offer_marked.add(user_id)
             sheets.upsert_client(username, offer="Да")
+            logger.info(f"📋 CRM: {username} — предложение сделано")
 
     if user_id not in _trial_marked and trial_link_sent:
         _trial_marked.add(user_id)
         sheets.mark_trial_started(username)
-        logger.info(f"Trial started for {username}")
+        logger.info(f"🎯 {username} согласился на триал — ссылка отправлена, CRM обновлён")
 
 
 # ------------------------------------------------------------------ #
@@ -218,4 +222,4 @@ async def _notify_owner_takeover(
             parse_mode="Markdown",
         )
     except Exception as e:
-        logger.error(f"Failed to notify owner: {e}")
+        logger.error(f"Не удалось отправить уведомление владельцу: {e}")
