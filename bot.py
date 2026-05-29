@@ -1,16 +1,20 @@
+import asyncio
 import logging
+
+from telegram import Bot
+from telegram.error import Conflict
 from telegram.ext import (
     Application,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
     filters,
 )
+
 from config import Config
 from handlers import handle_message, handle_business_message, handle_start
 from scheduler import start_scheduler
 
-# ── Уровни логирования ───────────────────────────────────────────────
-# Убираем мусор от сторонних библиотек — оставляем только наш код
+# ── Логирование ──────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s  %(levelname)s  [%(name)s]  %(message)s",
     datefmt="%H:%M:%S",
@@ -27,12 +31,34 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-async def post_init(application: Application):
+async def _wait_for_token_free(token: str, timeout: int = 30) -> None:
+    """Ждёт, пока предыдущий инстанс бота освободит токен."""
+    bot = Bot(token=token)
+    try:
+        for attempt in range(1, timeout + 1):
+            try:
+                await bot.delete_webhook(drop_pending_updates=True)
+                await bot.get_updates(offset=-1, timeout=3)
+                logger.info("Токен свободен, запускаемся")
+                return
+            except Conflict:
+                logger.warning(f"Токен занят — жду... ({attempt}/{timeout})")
+                await asyncio.sleep(1)
+        raise RuntimeError("Токен не освободился за 30 секунд — аварийный стоп")
+    finally:
+        await bot.shutdown()
+
+
+async def post_init(application: Application) -> None:
     await application.bot.delete_webhook(drop_pending_updates=True)
     start_scheduler(application)
 
 
-def main():
+def main() -> None:
+    asyncio.get_event_loop().run_until_complete(
+        _wait_for_token_free(Config.BOT_TOKEN)
+    )
+
     app = (
         Application.builder()
         .token(Config.BOT_TOKEN)
@@ -41,21 +67,16 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", handle_start))
-
-    # Обычные личные сообщения боту напрямую
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.BUSINESS_MESSAGE,
         handle_message,
     ))
-
-    # Сообщения через Secretary Mode
     app.add_handler(MessageHandler(
         filters.UpdateType.BUSINESS_MESSAGE & filters.TEXT,
         handle_business_message,
     ))
 
     logger.info("🤖 Бот запущен и ждёт сообщений")
-
     app.run_polling(
         drop_pending_updates=True,
         allowed_updates=[
