@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 async def post_init(application: Application):
+    await application.bot.delete_webhook(drop_pending_updates=True)
     start_scheduler(application)
 
 
