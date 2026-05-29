@@ -88,7 +88,7 @@ class SheetsClient:
         try:
             cell = self.crm.find(username, in_column=COL["username"])
             return cell.row
-        except (gspread.CellNotFound, Exception):
+        except Exception:
             return None
 
     def _crm_next_row(self) -> int:
@@ -238,7 +238,7 @@ class SheetsClient:
         try:
             cell = self.hist.find(str(chat_id), in_column=HIST_COL_CHAT_ID)
             return cell.row
-        except (gspread.CellNotFound, Exception):
+        except Exception:
             return None
 
     def _hist_next_row(self) -> int:
@@ -281,7 +281,7 @@ class SheetsClient:
             cell        = self.hist.find(username, in_column=HIST_COL_USERNAME)
             chat_id_str = self.hist.cell(cell.row, HIST_COL_CHAT_ID).value
             return int(chat_id_str) if chat_id_str else None
-        except (gspread.CellNotFound, Exception):
+        except Exception:
             return None
 
 
