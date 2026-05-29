@@ -15,25 +15,36 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+# Колонки CRM (1-indexed)
+# A=1  B=2        C=3   D=4              E=5                F=6      G=7
+# ID   Username   Имя   Аккаунт сейлза   Дата 1го контакта  Диалог   Предложение
+# H=8          I=9                J=10     K=11              L=12         M=13
+# Тест-период  Подписался на бот  Статус   Дата подключения  Тариф(дней)  Дата окончания
+# N=14          O=15         P=16         Q=17
+# Оплата(лари)  Оплата(руб)  Город/тема   Комментарий
+
 COL = {
-    "username":      2,
-    "name":          3,
-    "sales_account": 4,
-    "first_contact": 5,
-    "dialog":        6,
-    "offer":         7,
-    "trial":         8,
-    "subscribed":    9,
-    "status":        10,
-    "connected_at":  11,
-    "tariff_days":   12,
-    "expires_at":    13,
-    "payment_lari":  14,
-    "payment_rub":   15,
-    "city_topic":    16,
-    "comment":       17,
-    "chat_id":       18,
+    "chat_id":       1,   # A
+    "username":      2,   # B
+    "name":          3,   # C
+    "sales_account": 4,   # D
+    "first_contact": 5,   # E
+    "dialog":        6,   # F
+    "offer":         7,   # G
+    "trial":         8,   # H
+    "subscribed":    9,   # I — «Подписался на бот»
+    "status":        10,  # J
+    "connected_at":  11,  # K
+    "tariff_days":   12,  # L
+    "expires_at":    13,  # M
+    "payment_lari":  14,  # N
+    "payment_rub":   15,  # O
+    "city_topic":    16,  # P
+    "comment":       17,  # Q
 }
+
+# Данные начинаются со строки 6 (1-5: заголовок + счётчики)
+CRM_DATA_START_ROW = 6
 
 HIST_COL_USERNAME = 1
 HIST_COL_CHAT_ID  = 2
@@ -81,13 +92,28 @@ class SheetsClient:
         return self._hist_sheet
 
     # ------------------------------------------------------------------ #
-    # CRM helpers                                                          #
+    # CRM: поиск строки                                                    #
     # ------------------------------------------------------------------ #
 
-    def _crm_find_row(self, username: str) -> Optional[int]:
+    def _crm_find_row(self, username: str = "", chat_id: str = "") -> Optional[int]:
+        """
+        Ищет строку по chat_id (колонка A) или username (колонка B).
+        chat_id имеет приоритет — точнее.
+        """
         try:
-            cell = self.crm.find(username, in_column=COL["username"])
-            return cell.row
+            if chat_id:
+                try:
+                    cell = self.crm.find(str(chat_id), in_column=COL["chat_id"])
+                    return cell.row
+                except Exception:
+                    pass
+            if username:
+                try:
+                    cell = self.crm.find(username, in_column=COL["username"])
+                    return cell.row
+                except Exception:
+                    pass
+            return None
         except Exception:
             return None
 
@@ -96,10 +122,10 @@ class SheetsClient:
         for i in range(len(col_values) - 1, -1, -1):
             if col_values[i].strip():
                 return i + 2
-        return Config.CRM_DATA_START_ROW
+        return CRM_DATA_START_ROW
 
     # ------------------------------------------------------------------ #
-    # CRM: upsert клиента                                                  #
+    # CRM: upsert клиента (seller_tg)                                      #
     # ------------------------------------------------------------------ #
 
     def upsert_client(
@@ -123,15 +149,15 @@ class SheetsClient:
         comment: str = "",
     ):
         try:
-            today = datetime.now().strftime("%Y-%m-%d")
-            row   = self._crm_find_row(username)
+            today  = datetime.now().strftime("%Y-%m-%d")
+            row    = self._crm_find_row(username=username, chat_id=chat_id)
             is_new = row is None
 
             if is_new:
                 row = self._crm_next_row()
                 updates = {
-                    "username":      username,
                     "chat_id":       chat_id,
+                    "username":      username,
                     "name":          name,
                     "sales_account": sales_account,
                     "first_contact": today,
@@ -148,18 +174,25 @@ class SheetsClient:
                     "city_topic":    city_topic,
                     "comment":       comment,
                 }
-                logger.info(f"📝 CRM: добавлен новый контакт {username}")
+                logger.info(f"📝 CRM: добавлен новый контакт {username} (chat_id={chat_id})")
             else:
                 updates = {
                     k: v for k, v in {
-                        "chat_id": chat_id, "name": name,
-                        "sales_account": sales_account, "dialog": dialog,
-                        "offer": offer, "trial": trial,
-                        "subscribed": subscribed, "status": status,
-                        "connected_at": connected_at, "tariff_days": tariff_days,
-                        "expires_at": expires_at, "payment_lari": payment_lari,
-                        "payment_rub": payment_rub, "city_topic": city_topic,
-                        "comment": comment,
+                        "chat_id":       chat_id,
+                        "name":          name,
+                        "sales_account": sales_account,
+                        "dialog":        dialog,
+                        "offer":         offer,
+                        "trial":         trial,
+                        "subscribed":    subscribed,
+                        "status":        status,
+                        "connected_at":  connected_at,
+                        "tariff_days":   tariff_days,
+                        "expires_at":    expires_at,
+                        "payment_lari":  payment_lari,
+                        "payment_rub":   payment_rub,
+                        "city_topic":    city_topic,
+                        "comment":       comment,
                     }.items() if v
                 }
                 logger.info(f"📝 CRM: обновлён {username} — {list(updates.keys())}")
@@ -175,7 +208,95 @@ class SheetsClient:
         except Exception as e:
             logger.error(f"Не удалось сохранить {username} в CRM: {e}")
 
+    # ------------------------------------------------------------------ #
+    # CRM: подписка через monitor_tg (/start в lead_vitrina_bot)           #
+    # ------------------------------------------------------------------ #
+
+    def mark_bot_subscribed(self, chat_id: str, username: str, subscribed_at: str = ""):
+        """
+        Вызывается из monitor_tg когда риэлтор нажал /start в lead_vitrina_bot.
+        Ищет строку по chat_id или username.
+        Если нашёл — ставит 'Подписался на бот' = Да, дату подключения, статус Триал.
+        Если не нашёл — создаёт новую строку (подписался сам, без seller_tg).
+        """
+        try:
+            today    = subscribed_at or datetime.now().strftime("%Y-%m-%d")
+            trial_end = (
+                datetime.strptime(today[:10], "%Y-%m-%d") + timedelta(days=3)
+            ).strftime("%Y-%m-%d")
+
+            row    = self._crm_find_row(username=username, chat_id=chat_id)
+            is_new = row is None
+
+            if is_new:
+                row = self._crm_next_row()
+                updates = {
+                    "chat_id":      chat_id,
+                    "username":     username,
+                    "first_contact": today,
+                    "subscribed":   "Да",
+                    "status":       STATUS_TRIAL,
+                    "connected_at": today,
+                    "tariff_days":  "3",
+                    "expires_at":   trial_end,
+                    "city_topic":   "Батуми / аренда",
+                }
+                logger.info(
+                    f"📝 CRM: новый подписчик бота {username} (chat_id={chat_id}) "
+                    f"— пришёл напрямую без seller_tg, триал до {trial_end}"
+                )
+            else:
+                updates = {
+                    "chat_id":      chat_id,
+                    "subscribed":   "Да",
+                    "status":       STATUS_TRIAL,
+                    "connected_at": today,
+                    "tariff_days":  "3",
+                    "expires_at":   trial_end,
+                }
+                logger.info(
+                    f"🔵 CRM: {username} подписался на бота "
+                    f"— триал запущен с {today}, истекает {trial_end}"
+                )
+
+            cells = [
+                gspread.Cell(row, COL[field], value)
+                for field, value in updates.items()
+                if field in COL
+            ]
+            if cells:
+                self.crm.update_cells(cells, value_input_option="USER_ENTERED")
+
+        except Exception as e:
+            logger.error(f"Ошибка mark_bot_subscribed для {username}: {e}")
+
+    def mark_bot_unsubscribed(self, chat_id: str, username: str):
+        """
+        Вызывается из monitor_tg когда риэлтор нажал /stop.
+        Ставит статус Отключён, не трогает остальные данные.
+        """
+        try:
+            row = self._crm_find_row(username=username, chat_id=chat_id)
+            if row is None:
+                logger.warning(f"⚠️  mark_bot_unsubscribed: {username} не найден в CRM")
+                return
+
+            cells = [
+                gspread.Cell(row, COL["subscribed"], "Нет"),
+                gspread.Cell(row, COL["status"],     STATUS_DISCONNECTED),
+            ]
+            self.crm.update_cells(cells, value_input_option="USER_ENTERED")
+            logger.info(f"🔴 CRM: {username} отписался от бота")
+
+        except Exception as e:
+            logger.error(f"Ошибка mark_bot_unsubscribed для {username}: {e}")
+
     def mark_trial_started(self, username: str):
+        """
+        Устаревший метод — оставлен для совместимости.
+        Теперь триал запускается через mark_bot_subscribed из monitor_tg.
+        Используется как fallback если monitor_tg ещё не обновлён.
+        """
         today     = datetime.now().strftime("%Y-%m-%d")
         trial_end = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
         self.upsert_client(
@@ -186,7 +307,7 @@ class SheetsClient:
             tariff_days="3",
             expires_at=trial_end,
         )
-        logger.info(f"🔵 Триал запущен для {username}, истекает {trial_end}")
+        logger.info(f"🔵 Триал (fallback) запущен для {username}, истекает {trial_end}")
 
     # ------------------------------------------------------------------ #
     # CRM: экспирация                                                      #
@@ -198,14 +319,14 @@ class SheetsClient:
             all_rows = self.crm.get_all_values()
             results  = []
 
-            for row in all_rows[Config.CRM_DATA_START_ROW - 1:]:
+            for row in all_rows[CRM_DATA_START_ROW - 1:]:
                 if len(row) < COL["expires_at"]:
                     continue
+                chat_id     = row[COL["chat_id"]     - 1].strip()
                 username    = row[COL["username"]    - 1].strip()
                 status      = row[COL["status"]      - 1].strip()
                 expires_str = row[COL["expires_at"]  - 1].strip()
                 tariff      = row[COL["tariff_days"] - 1].strip()
-                chat_id     = row[COL["chat_id"] - 1].strip() if len(row) >= COL["chat_id"] else ""
 
                 if not expires_str or not username:
                     continue
@@ -213,8 +334,8 @@ class SheetsClient:
                     exp_date = datetime.strptime(expires_str[:10], "%Y-%m-%d").date()
                     if exp_date == target:
                         results.append({
-                            "username":    username,
                             "chat_id":     chat_id,
+                            "username":    username,
                             "status":      status,
                             "expires_at":  expires_str[:10],
                             "tariff_days": tariff,
@@ -223,7 +344,10 @@ class SheetsClient:
                     continue
 
             if results:
-                logger.info(f"📅 Найдено клиентов с истекающим доступом через {days_ahead} дн.: {len(results)}")
+                logger.info(
+                    f"📅 Найдено клиентов с истекающим доступом "
+                    f"через {days_ahead} дн.: {len(results)}"
+                )
             return results
 
         except Exception as e:
@@ -267,14 +391,18 @@ class SheetsClient:
         try:
             row = self._hist_find_row(chat_id)
             if row is None:
-                logger.warning(f"История не найдена для chat_id={chat_id}, пропускаем запись")
+                logger.warning(
+                    f"История не найдена для chat_id={chat_id}, пропускаем запись"
+                )
                 return
             col        = self._hist_next_msg_col(row)
             ts         = datetime.now().strftime("%H:%M")
             cell_value = f"[{ts}] {role}: {text[:500]}"
             self.hist.update_cell(row, col, cell_value)
         except Exception as e:
-            logger.error(f"Не удалось записать сообщение в историю (chat_id={chat_id}): {e}")
+            logger.error(
+                f"Не удалось записать сообщение в историю (chat_id={chat_id}): {e}"
+            )
 
     def history_get_client_chat_id(self, username: str) -> Optional[int]:
         try:
