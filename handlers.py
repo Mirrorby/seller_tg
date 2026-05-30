@@ -120,9 +120,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Человек прислал вопрос
     if state == 'waiting_question':
         _user_state.pop(user_id, None)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+        ])
         await update.message.reply_text(
             '🙏 Спасибо за ваш вопрос!\n\n'
-            'Менеджер обязательно свяжется с вами в ближайшее время.'
+            'Менеджер обязательно свяжется с вами в ближайшее время.',
+            reply_markup=keyboard,
         )
         await _notify_owner(context, username, user_id, f'❓ Вопрос:\n{text}')
         return
@@ -130,10 +134,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Человек поделился мнением
     if state == 'waiting_feedback':
         _user_state.pop(user_id, None)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+        ])
         await update.message.reply_text(
             '🙏 Спасибо за ваш отзыв!\n\n'
             'Мы очень ценим обратную связь. '
-            'Менеджер обязательно свяжется с вами в ближайшее время.'
+            'Менеджер обязательно свяжется с вами в ближайшее время.',
+            reply_markup=keyboard,
         )
         await _notify_owner(context, username, user_id, f'💬 Отзыв/мнение:\n{text}')
         return
@@ -405,11 +413,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         _user_state[user_id] = f'waiting_screenshot:{method}_{tariff_key}'
 
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+        ])
         await query.edit_message_text(
             f'✅ Отлично! Вы выбрали:\n'
             f'📋 Тариф: <b>{tariff_name}</b> — <b>{price}</b>\n\n'
             f'{payment_text}',
             parse_mode='HTML',
+            reply_markup=keyboard,
         )
         await _notify_owner(
             context, username, user_id,
