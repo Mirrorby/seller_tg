@@ -94,7 +94,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
 
     await update.message.reply_text(
-        '👋 Добро пожаловать!\n\nЧем могу помочь?',
+        '👋 Добро пожаловать в бот поддержки сервиса Лид-витрина!\n\nЧем могу помочь?',
         reply_markup=keyboard,
     )
 
