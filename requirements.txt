@@ -4,3 +4,4 @@ gspread==6.1.2
 google-auth==2.32.0
 apscheduler==3.10.4
 python-dotenv==1.0.1
+telethon
