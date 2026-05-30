@@ -12,7 +12,7 @@ from telegram.ext import (
 )
 
 from config import Config
-from handlers import handle_message, handle_business_message, handle_start, handle_callback, handle_photo
+from handlers import handle_message, handle_business_message, handle_start, handle_callback, handle_photo, handle_broadcast
 from scheduler import start_scheduler
 
 # ── Логирование ──────────────────────────────────────────────────────
@@ -78,6 +78,7 @@ def main() -> None:
         filters.UpdateType.BUSINESS_MESSAGE & filters.TEXT,
         handle_business_message,
     ))
+    app.add_handler(CommandHandler("broadcast", handle_broadcast))
 
     logger.info("🤖 Бот запущен и ждёт сообщений")
     app.run_polling(
