@@ -7,11 +7,12 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
 from config import Config
-from handlers import handle_message, handle_business_message, handle_start
+from handlers import handle_message, handle_business_message, handle_start, handle_callback, handle_photo
 from scheduler import start_scheduler
 
 # ── Логирование ──────────────────────────────────────────────────────
@@ -67,6 +68,8 @@ def main() -> None:
     )
 
     app.add_handler(CommandHandler("start", handle_start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.BUSINESS_MESSAGE,
         handle_message,
@@ -81,6 +84,7 @@ def main() -> None:
         drop_pending_updates=True,
         allowed_updates=[
             "message",
+            "callback_query",
             "business_connection",
             "business_message",
             "edited_business_message",
