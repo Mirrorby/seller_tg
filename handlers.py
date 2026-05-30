@@ -333,13 +333,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == 'intent:question':
         _user_state[user_id] = 'waiting_question'
-        await query.edit_message_text('✍️ Напишите ваш вопрос — я передам его менеджеру.')
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+        ])
+        await query.edit_message_text(
+            '✍️ Напишите ваш вопрос — я передам его менеджеру.',
+            reply_markup=keyboard,
+        )
         await _notify_owner(context, username, user_id, '❓ Нажал «Задать вопрос»')
         return
 
     if data == 'intent:feedback':
         _user_state[user_id] = 'waiting_feedback'
-        await query.edit_message_text('✍️ Напишите ваше мнение или отзыв — нам важна любая обратная связь.')
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+        ])
+        await query.edit_message_text(
+            '✍️ Напишите ваше мнение или отзыв — нам важна любая обратная связь.',
+            reply_markup=keyboard,
+        )
         await _notify_owner(context, username, user_id, '💬 Нажал «Поделиться мнением»')
         return
 
@@ -348,6 +360,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton('💎 USDT (крипта)',       callback_data='paymethod:crypto')],
             [InlineKeyboardButton('💳 Карта РФ (перевод)',  callback_data='paymethod:card_ru')],
             # [InlineKeyboardButton('🌍 Карта зарубежного банка', callback_data='paymethod:card_foreign')],
+            [InlineKeyboardButton('↩️ Главное меню',        callback_data='menu:main')],
         ])
         await query.edit_message_text(
             '💳 <b>Выберите способ оплаты:</b>',
@@ -366,12 +379,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton('1 месяц — 1 349 ₽',                          callback_data=f'tariff:{method}:1m')],
                 [InlineKeyboardButton('3 месяца — 3 399 ₽ (1 133 ₽/мес вместо 1 349 ₽)', callback_data=f'tariff:{method}:3m')],
                 [InlineKeyboardButton('6 месяцев — 4 899 ₽ (817 ₽/мес вместо 1 349 ₽)',  callback_data=f'tariff:{method}:6m')],
+                [InlineKeyboardButton('↩️ Назад', callback_data='intent:pay')],
             ])
         else:
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton('1 месяц — $19',                    callback_data=f'tariff:{method}:1m')],
                 [InlineKeyboardButton('3 месяца — $48 ($16/мес вместо $19)',   callback_data=f'tariff:{method}:3m')],
                 [InlineKeyboardButton('6 месяцев — $69 ($11.5/мес вместо $19)', callback_data=f'tariff:{method}:6m')],
+                [InlineKeyboardButton('↩️ Назад', callback_data='intent:pay')],
             ])
 
         await query.edit_message_text(
@@ -401,7 +416,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'💰 Выбрал тариф: {tariff_name} {price} | способ: {method}'
         )
         return
-
+        
+    if data == 'menu:main':
+        _user_state.pop(user_id, None)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton('❓ Задать вопрос',      callback_data='intent:question')],
+            [InlineKeyboardButton('💬 Поделиться мнением', callback_data='intent:feedback')],
+            [InlineKeyboardButton('💳 Оплатить подписку',  callback_data='intent:pay')],
+        ])
+        await query.edit_message_text(
+            '👋 Чем могу помочь?',
+            reply_markup=keyboard,
+        )
+        return
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Обновление этапов CRM
