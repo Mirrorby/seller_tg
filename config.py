@@ -10,6 +10,11 @@ class Config:
     BOT_TOKEN: str = os.environ["BOT_TOKEN"]
     OWNER_CHAT_ID: int = int(os.environ["OWNER_CHAT_ID"])
 
+    # Broadcaster (Telethon — отдельный аккаунт для рассылки в группы)
+    TG_API_ID: int = int(os.getenv("TG_API_ID", "0"))
+    TG_API_HASH: str = os.getenv("TG_API_HASH", "")
+    TG_SESSION_STRING: str = os.getenv("TG_SESSION_STRING", "")
+
     # Gemini
     GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
