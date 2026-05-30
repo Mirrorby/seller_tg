@@ -2,6 +2,8 @@ import asyncio
 import logging
 import random
 
+from broadcaster import run_broadcast
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -97,7 +99,23 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '👋 Добро пожаловать в бот поддержки сервиса Лид-витрина!\n\nЧем могу помочь?',
         reply_markup=keyboard,
     )
+    
+async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запускает рассылку в группы. Только для владельца."""
+    user_id = update.effective_user.id
 
+    if user_id != Config.OWNER_CHAT_ID:
+        await update.message.reply_text("⛔ Команда доступна только владельцу.")
+        return
+
+    async def send_progress(text: str):
+        try:
+            await context.bot.send_message(chat_id=Config.OWNER_CHAT_ID, text=text)
+        except Exception as e:
+            logger.error(f"Ошибка отправки прогресса: {e}")
+
+    # Запускаем рассылку в фоне — бот не блокируется
+    asyncio.create_task(run_broadcast(progress_callback=send_progress))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Обычные сообщения боту напрямую
