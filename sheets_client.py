@@ -449,4 +449,14 @@ def get_broadcast_data(self) -> tuple:
     logger.info(f"Broadcaster: групп={len(groups)}, шаблонов={len(templates)}")
     return groups, templates, groups_ws
 
+def get_broadcast_token(self) -> str:
+    """Читает токен бота-рассылки из листа «Настройки» B2."""
+    try:
+        wb = self.gc.open_by_key(self.sheet_id)
+        ws = wb.worksheet("Настройки")
+        return ws.acell("B2").value or ""
+    except Exception as e:
+        logger.error(f"Не удалось прочитать токен рассылки из Настроек: {e}")
+        return ""
+
 sheets = SheetsClient()
