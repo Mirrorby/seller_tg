@@ -412,51 +412,51 @@ class SheetsClient:
         except Exception:
             return None
 
-def get_broadcast_data(self) -> tuple:
-    """
-    Читает листы «Группы» и «Шаблоны».
-    Возвращает (groups, templates, groups_ws).
-    """
-    wb = self.gc.open_by_key(self.sheet_id)
-    groups_ws = wb.worksheet("Группы")
-    rows = groups_ws.get_all_values()[1:]  # пропускаем заголовок
-
-    groups = []
-    for i, row in enumerate(rows, start=2):
-        row = row + [""] * (8 - len(row))  # дополняем до 8 колонок
-        url = row[0].strip()
-        if not url:
-            continue
-        active_raw = row[3].strip().upper()
-        groups.append({
-            "row":           i,
-            "username":      url,
-            "template_key":  row[1].strip(),
-            "last_sent":     row[2].strip(),
-            "enabled":       active_raw != "FALSE",
-            "status":        row[4].strip(),
-            "post_link":     row[5].strip(),
-            "post_new":      row[6].strip(),
-            "posts_between": row[7].strip(),
-        })
-
-    templates_ws = wb.worksheet("Шаблоны")
-    templates = {}
-    for row in templates_ws.get_all_values()[1:]:
-        if len(row) >= 2 and row[0].strip():
-            templates[row[0].strip()] = row[1].strip()
-
-    logger.info(f"Broadcaster: групп={len(groups)}, шаблонов={len(templates)}")
-    return groups, templates, groups_ws
-
-def get_broadcast_token(self) -> str:
-    """Читает токен бота-рассылки из листа «Настройки» B2."""
-    try:
+    def get_broadcast_data(self) -> tuple:
+        """
+        Читает листы «Группы» и «Шаблоны».
+        Возвращает (groups, templates, groups_ws).
+        """
         wb = self.gc.open_by_key(self.sheet_id)
-        ws = wb.worksheet("Настройки")
-        return ws.acell("B2").value or ""
-    except Exception as e:
-        logger.error(f"Не удалось прочитать токен рассылки из Настроек: {e}")
-        return ""
+        groups_ws = wb.worksheet("Группы")
+        rows = groups_ws.get_all_values()[1:]  # пропускаем заголовок
+    
+        groups = []
+        for i, row in enumerate(rows, start=2):
+            row = row + [""] * (8 - len(row))  # дополняем до 8 колонок
+            url = row[0].strip()
+            if not url:
+                continue
+            active_raw = row[3].strip().upper()
+            groups.append({
+                "row":           i,
+                "username":      url,
+                "template_key":  row[1].strip(),
+                "last_sent":     row[2].strip(),
+                "enabled":       active_raw != "FALSE",
+                "status":        row[4].strip(),
+                "post_link":     row[5].strip(),
+                "post_new":      row[6].strip(),
+                "posts_between": row[7].strip(),
+            })
+    
+        templates_ws = wb.worksheet("Шаблоны")
+        templates = {}
+        for row in templates_ws.get_all_values()[1:]:
+            if len(row) >= 2 and row[0].strip():
+                templates[row[0].strip()] = row[1].strip()
+    
+        logger.info(f"Broadcaster: групп={len(groups)}, шаблонов={len(templates)}")
+        return groups, templates, groups_ws
+
+    def get_broadcast_token(self) -> str:
+        """Читает токен бота-рассылки из листа «Настройки» B2."""
+        try:
+            wb = self.gc.open_by_key(self.sheet_id)
+            ws = wb.worksheet("Настройки")
+            return ws.acell("B2").value or ""
+        except Exception as e:
+            logger.error(f"Не удалось прочитать токен рассылки из Настроек: {e}")
+            return ""
 
 sheets = SheetsClient()
