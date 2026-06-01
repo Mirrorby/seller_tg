@@ -12,10 +12,12 @@ from telegram.ext import (
 )
 
 from config import Config
-from handlers import handle_message, handle_business_message, handle_start, handle_callback, handle_photo, handle_broadcast
+from handlers import (
+    handle_message, handle_business_message, handle_start,
+    handle_callback, handle_photo, handle_broadcast,
+)
 from scheduler import start_scheduler
 
-# ── Логирование ──────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s  %(levelname)s  [%(name)s]  %(message)s",
     datefmt="%H:%M:%S",
@@ -55,8 +57,8 @@ async def post_init(application: Application) -> None:
     start_scheduler(application)
 
 
-def main() -> None:
-    asyncio.run(_wait_for_token_free(Config.BOT_TOKEN))
+async def main() -> None:
+    await _wait_for_token_free(Config.BOT_TOKEN)
 
     app = (
         Application.builder()
@@ -79,7 +81,7 @@ def main() -> None:
     app.add_handler(CommandHandler("broadcast", handle_broadcast))
 
     logger.info("🤖 Бот запущен и ждёт сообщений")
-    app.run_polling(
+    await app.run_polling(
         drop_pending_updates=True,
         allowed_updates=[
             "message",
@@ -92,4 +94,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
