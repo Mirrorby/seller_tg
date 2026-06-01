@@ -2,7 +2,7 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "python bot.py"
+startCommand = "sleep 15 && python main.py"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 drainingTimeout = 10
