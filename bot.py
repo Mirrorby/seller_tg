@@ -57,8 +57,8 @@ async def post_init(application: Application) -> None:
     start_scheduler(application)
 
 
-async def main() -> None:
-    await _wait_for_token_free(Config.BOT_TOKEN)
+def main() -> None:
+    asyncio.run(_wait_for_token_free(Config.BOT_TOKEN))
 
     app = (
         Application.builder()
@@ -81,7 +81,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("broadcast", handle_broadcast))
 
     logger.info("🤖 Бот запущен и ждёт сообщений")
-    await app.run_polling(
+    app.run_polling(
         drop_pending_updates=True,
         allowed_updates=[
             "message",
@@ -94,4 +94,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
