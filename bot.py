@@ -59,6 +59,8 @@ async def post_init(application: Application) -> None:
 
 def main() -> None:
     asyncio.run(_wait_for_token_free(Config.BOT_TOKEN))
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     app = (
         Application.builder()
