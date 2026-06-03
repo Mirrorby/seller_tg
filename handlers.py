@@ -60,6 +60,14 @@ _registered:   set[int] = set()
 _offer_marked: set[int] = set()
 _trial_marked: set[int] = set()
 
+# Дебаунс: накапливаем сообщения от одного пользователя
+DEBOUNCE_SECONDS = 4
+MAX_WAIT_SECONDS = 10
+
+_pending_messages:   dict[int, list[str]] = {}
+_debounce_tasks:     dict[int, asyncio.Task] = {}
+_first_message_time: dict[int, float] = {}
+
 
 def _get_username(user) -> str:
     return f"@{user.username}" if user.username else str(user.id)
@@ -187,27 +195,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         logger.info(f"💬 {username} пишет: {text[:80]}")
 
+   # Дебаунс: накапливаем сообщения, ждём паузы перед ответом
+    now = asyncio.get_event_loop().time()
+    if user_id not in _pending_messages:
+        _pending_messages[user_id] = []
+        _first_message_time[user_id] = now
+    _pending_messages[user_id].append(text)
     sheets.history_append_message(user_id, "👤", text)
 
-    try:
-        reply, needs_takeover, trial_link_sent = await gemini.chat(user_id, text)
-    except Exception as e:
-        logger.error(f"Gemini не ответил для {username}: {e}")
-        return
+    if user_id in _debounce_tasks and not _debounce_tasks[user_id].done():
+        _debounce_tasks[user_id].cancel()
 
-    delay = _typing_delay(reply)
-    logger.info(f"⏳ Имитируем печать {delay:.1f} сек перед ответом {username}...")
-    await asyncio.sleep(delay)
+    elapsed = now - _first_message_time.get(user_id, now)
+    wait = 0.3 if elapsed >= MAX_WAIT_SECONDS else DEBOUNCE_SECONDS
 
-    await update.message.reply_text(reply)
-    logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
+    async def _flush_direct():
+        await asyncio.sleep(wait)
+        messages = _pending_messages.pop(user_id, [])
+        _first_message_time.pop(user_id, None)
+        _debounce_tasks.pop(user_id, None)
+        if not messages:
+            return
+        combined = "\n".join(messages)
+        try:
+            reply, needs_takeover, trial_link_sent = await gemini.chat(user_id, combined)
+        except Exception as e:
+            logger.error(f"Gemini не ответил для {username}: {e}")
+            return
+        delay = _typing_delay(reply)
+        logger.info(f"⏳ Имитируем печать {delay:.1f} сек перед ответом {username}...")
+        await asyncio.sleep(delay)
+        await update.message.reply_text(reply)
+        logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
+        sheets.history_append_message(user_id, "🤖", reply)
+        _update_crm_stage(user_id, username, reply, trial_link_sent)
+        if needs_takeover:
+            logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
+            await _notify_owner_takeover(context, username, combined, reply)
 
-    sheets.history_append_message(user_id, "🤖", reply)
-    _update_crm_stage(user_id, username, reply, trial_link_sent)
-
-    if needs_takeover:
-        logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
-        await _notify_owner_takeover(context, username, text, reply)
+    _debounce_tasks[user_id] = asyncio.create_task(_flush_direct())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -250,46 +276,59 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
     else:
         logger.info(f"💬 {username} пишет: {text[:80]}")
 
+    now = asyncio.get_event_loop().time()
+    if user_id not in _pending_messages:
+        _pending_messages[user_id] = []
+        _first_message_time[user_id] = now
+    _pending_messages[user_id].append(text)
     sheets.history_append_message(user_id, "👤", text)
 
-    try:
-        reply, needs_takeover, trial_link_sent = await gemini.chat(user_id, text)
-    except Exception as e:
-        logger.error(f"Gemini не ответил для {username}: {e}")
-        return
+    if user_id in _debounce_tasks and not _debounce_tasks[user_id].done():
+        _debounce_tasks[user_id].cancel()
 
-    delay = _typing_delay(reply)
-    logger.info(f"⏳ Имитируем печать {delay:.1f} сек перед ответом {username}...")
+    elapsed = now - _first_message_time.get(user_id, now)
+    wait = 0.3 if elapsed >= MAX_WAIT_SECONDS else DEBOUNCE_SECONDS
 
-    try:
-        await context.bot.send_chat_action(
-            chat_id=msg.chat.id,
-            action="typing",
-            business_connection_id=business_connection_id,
-        )
-    except Exception:
-        pass
+    async def _flush_business():
+        await asyncio.sleep(wait)
+        messages = _pending_messages.pop(user_id, [])
+        _first_message_time.pop(user_id, None)
+        _debounce_tasks.pop(user_id, None)
+        if not messages:
+            return
+        combined = "\n".join(messages)
+        try:
+            reply, needs_takeover, trial_link_sent = await gemini.chat(user_id, combined)
+        except Exception as e:
+            logger.error(f"Gemini не ответил для {username}: {e}")
+            return
+        delay = _typing_delay(reply)
+        logger.info(f"⏳ Имитируем печать {delay:.1f} сек перед ответом {username}...")
+        try:
+            await context.bot.send_chat_action(
+                chat_id=msg.chat.id,
+                action="typing",
+                business_connection_id=business_connection_id,
+            )
+        except Exception:
+            pass
+        await asyncio.sleep(delay)
+        try:
+            await context.bot.send_message(
+                chat_id=msg.chat.id,
+                text=reply,
+                business_connection_id=business_connection_id,
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить ответ {username}: {e}")
+        logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
+        sheets.history_append_message(user_id, "🤖", reply)
+        _update_crm_stage(user_id, username, reply, trial_link_sent)
+        if needs_takeover:
+            logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
+            await _notify_owner_takeover(context, username, combined, reply)
 
-    await asyncio.sleep(delay)
-
-    try:
-        await context.bot.send_message(
-            chat_id=msg.chat.id,
-            text=reply,
-            business_connection_id=business_connection_id,
-        )
-    except Exception as e:
-        logger.error(f"Не удалось отправить ответ {username}: {e}")
-
-    logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
-
-    sheets.history_append_message(user_id, "🤖", reply)
-    _update_crm_stage(user_id, username, reply, trial_link_sent)
-
-    if needs_takeover:
-        logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
-        await _notify_owner_takeover(context, username, text, reply)
-
+    _debounce_tasks[user_id] = asyncio.create_task(_flush_business())
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Входящие фото (скриншот оплаты)
