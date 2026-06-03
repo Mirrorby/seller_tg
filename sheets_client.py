@@ -145,7 +145,7 @@ class SheetsClient:
         expires_at: str = "",
         payment_lari: str = "",
         payment_rub: str = "",
-        city_topic: str = "Батуми / аренда",
+        city_topic: str = "Батуми",
         comment: str = "",
     ):
         try:
@@ -239,7 +239,7 @@ class SheetsClient:
                     "connected_at": today,
                     "tariff_days":  "3",
                     "expires_at":   trial_end,
-                    "city_topic":   "Батуми / аренда",
+                    "city_topic":   "Батуми",
                 }
                 logger.info(
                     f"📝 CRM: новый подписчик бота {username} (chat_id={chat_id}) "
