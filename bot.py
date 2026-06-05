@@ -1,8 +1,4 @@
-import asyncio
 import logging
-
-from telegram import Bot
-from telegram.error import Conflict
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -10,7 +6,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-
+from telegram.error import NetworkError, TimedOut
 from config import Config
 from handlers import (
     handle_message, handle_business_message, handle_start,
@@ -34,38 +30,27 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-async def _wait_for_token_free(token: str, timeout: int = 30) -> None:
-    """Ждёт, пока предыдущий инстанс бота освободит токен."""
-    bot = Bot(token=token)
-    try:
-        for attempt in range(1, timeout + 1):
-            try:
-                await bot.delete_webhook(drop_pending_updates=True)
-                await bot.get_updates(offset=-1, timeout=3)
-                logger.info("Токен свободен, запускаемся")
-                return
-            except Conflict:
-                logger.warning(f"Токен занят — жду... ({attempt}/{timeout})")
-                await asyncio.sleep(1)
-        raise RuntimeError("Токен не освободился за 30 секунд — аварийный стоп")
-    finally:
-        await bot.shutdown()
-
-
 async def post_init(application: Application) -> None:
     await application.bot.delete_webhook(drop_pending_updates=True)
     start_scheduler(application)
+    logger.info("Scheduler запущен")
+
+
+async def error_handler(update, context) -> None:
+    err = context.error
+    if isinstance(err, (NetworkError, TimedOut)):
+        logger.warning(f"Сетевая ошибка (игнорируем): {err}")
+        return
+    logger.error(f"Необработанная ошибка: {err}", exc_info=err)
 
 
 def main() -> None:
-    asyncio.run(_wait_for_token_free(Config.BOT_TOKEN))
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     app = (
         Application.builder()
         .token(Config.BOT_TOKEN)
         .post_init(post_init)
+        .read_timeout(30)
+        .connect_timeout(30)
         .build()
     )
 
@@ -81,6 +66,7 @@ def main() -> None:
         handle_business_message,
     ))
     app.add_handler(CommandHandler("broadcast", handle_broadcast))
+    app.add_error_handler(error_handler)
 
     logger.info("🤖 Бот запущен и ждёт сообщений")
     app.run_polling(
