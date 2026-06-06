@@ -64,15 +64,12 @@ class LavaClient:
             "offerId": offer_id,
             "currency": currency,
             "buyerLanguage": "RU",
-            "paymentProvider": "UNLIMIT",
-            "paymentMethod": "CARD",
-            "periodicity": "MONTHLY",
         }
     
         if custom_fields:
             body["clientUtm"] = custom_fields
     
-        url = f"{LAVA_BASE}/api/v3/invoice"  # v3 !
+        url = f"{LAVA_BASE}/api/v3/invoice"
         try:
             async with self.session.post(url, json=body) as resp:
                 raw = await resp.text()
