@@ -28,7 +28,7 @@ TARIFFS = {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Lava.top (карта РФ — рубли)
+# Lava.top (карта)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def handle_lava_payment(
@@ -38,7 +38,6 @@ async def handle_lava_payment(
     tariff_key: str,
     tariff_name: str,
     amount_usd: float,
-    amount_rub: int,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> str:
     """
@@ -49,8 +48,7 @@ async def handle_lava_payment(
             email=email,
             offer_id=Config.LAVA_OFFER_ID,
             amount_usd=amount_usd,
-            currency="RUB",
-            payment_method="BANK131",
+            currency="USD",
             custom_fields={
                 "utm_source": "telegram_bot",
                 "utm_campaign": tariff_key,
@@ -65,8 +63,8 @@ async def handle_lava_payment(
 
         logger.info(f"Lava invoice for {username}: {invoice_id}")
         return (
-            f'💳 <b>Оплата картой РФ</b>\n\n'
-            f'Тариф: <b>{tariff_name}</b> — <b>{amount_rub} ₽</b>\n\n'
+            f'💳 <b>Оплата картой</b>\n\n'
+            f'Тариф: <b>{tariff_name}</b> — <b>${amount_usd}</b>\n\n'
             f'👉 <a href="{pay_url}">Перейти к оплате</a>\n\n'
             f'После оплаты подписка активируется автоматически.'
         )
@@ -100,7 +98,7 @@ async def handle_crypto_payment(
         pay_url    = inv.get("pay_url", "")
         invoice_id = inv.get("invoice_id")
 
-        # Запускаем фоновый поллинг
+        # Запускаем фоновый поллинг (ждём оплату до 24 часов)
         asyncio.create_task(
             _crypto_poll_task(
                 invoice_id=invoice_id,
@@ -112,7 +110,7 @@ async def handle_crypto_payment(
 
         logger.info(f"CryptoBot invoice for {username}: {invoice_id}")
         return (
-            f'🪙 <b>Оплата USDT (CryptoBot)</b>\n\n'
+            f'🪙 <b>Оплата криптой (USDT)</b>\n\n'
             f'Тариф: <b>{tariff_name}</b> — <b>{amount_usd} USDT</b>\n\n'
             f'👉 <a href="{pay_url}">Открыть в @CryptoBot</a>\n\n'
             f'Ссылка действительна 24 часа.\n'
@@ -158,9 +156,9 @@ async def handle_lava_webhook(payload: dict, context):
         logger.warning(f"Lava webhook: клиент не найден для invoice {invoice_id}")
         return
 
-    amount_rub = float(event.get("amount", 0))
-    tariff_key = _detect_tariff_by_amount_rub(amount_rub)
-    await activate_subscription(username, tariff_key, "card_rub_lava", context)
+    amount_usd = float(event.get("amount", 0))
+    tariff_key = _detect_tariff_by_amount_usd(amount_usd)
+    await activate_subscription(username, tariff_key, "card_lava", context)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -188,7 +186,7 @@ async def activate_subscription(
     )
     logger.info(f"Подписка активирована: {username} {tariff['label']} до {expires}")
 
-    # Уведомление owner
+    # Уведомление владельцу
     try:
         await context.bot.send_message(
             chat_id=Config.OWNER_CHAT_ID,
@@ -227,11 +225,11 @@ async def activate_subscription(
 
 def _find_username_by_lava_invoice(invoice_id: str) -> Optional[str]:
     try:
-        search_str = f"lava:{invoice_id}"
-        all_rows   = sheets.crm.get_all_values()
+        search_str   = f"lava:{invoice_id}"
+        all_rows     = sheets.crm.get_all_values()
+        comment_col  = 16  # Q=17, 0-indexed=16
+        username_col = 1   # B=2,  0-indexed=1
         for row in all_rows[Config.CRM_DATA_START_ROW - 1:]:
-            comment_col  = 16  # Q=17, 0-indexed=16
-            username_col = 1   # B=2,  0-indexed=1
             if len(row) > comment_col and search_str in row[comment_col]:
                 return row[username_col]
     except Exception as e:
@@ -239,10 +237,11 @@ def _find_username_by_lava_invoice(invoice_id: str) -> Optional[str]:
     return None
 
 
-def _detect_tariff_by_amount_rub(amount_rub: float) -> str:
-    if amount_rub < 2000:
-        return '1m'
-    elif amount_rub < 4500:
-        return '3m'
+def _detect_tariff_by_amount_usd(amount_usd: float) -> str:
+    """Определяем тариф по сумме в долларах."""
+    if amount_usd < 30:
+        return '1m'   # $19
+    elif amount_usd < 70:
+        return '3m'   # $49
     else:
-        return '6m'
+        return '6m'   # $89

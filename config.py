@@ -21,7 +21,7 @@ class Config:
     ).decode("utf-8")
 
     # Sheet names
-    CRM_SHEET_NAME: str = "👥 CRM клиентов"
+    CRM_SHEET_NAME: str = "CRM"
     HISTORY_SHEET_NAME: str = "💬 История диалогов"
 
     # CRM row config
