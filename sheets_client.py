@@ -51,6 +51,7 @@ HIST_COL_CHAT_ID  = 2
 HIST_DATA_START   = 3
 
 STATUS_ACTIVE       = "✅ Активен"
+STATUS_LEAD         = "🟡 Лид"
 STATUS_TRIAL        = "🔵 Триал"
 STATUS_DISCONNECTED = "🔴 Отключён"
 STATUS_REFUSED      = "🚫 Отказ"
@@ -293,21 +294,19 @@ class SheetsClient:
 
     def mark_trial_started(self, username: str):
         """
-        Устаревший метод — оставлен для совместимости.
-        Теперь триал запускается через mark_bot_subscribed из monitor_tg.
-        Используется как fallback если monitor_tg ещё не обновлён.
+        Вызывается когда Никита отправил ссылку @lead_vitrina_bot.
+        Ставит статус 🟡 Лид и дату первого касания.
+        tariff_days и expires_at НЕ трогаем — триал ещё не запущен,
+        клиент только получил ссылку на бот.
         """
-        today     = datetime.now().strftime("%Y-%m-%d")
-        trial_end = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         self.upsert_client(
             username,
             trial="Да",
-            status=STATUS_TRIAL,
+            status=STATUS_LEAD,
             connected_at=today,
-            tariff_days="3",
-            expires_at=trial_end,
         )
-        logger.info(f"🔵 Триал (fallback) запущен для {username}, истекает {trial_end}")
+        logger.info(f"🟡 Лид: {username} получил ссылку на триал ({today})")
 
     # ------------------------------------------------------------------ #
     # CRM: экспирация                                                      #
@@ -411,6 +410,58 @@ class SheetsClient:
             return int(chat_id_str) if chat_id_str else None
         except Exception:
             return None
+
+    def history_load_for_gemini(self, chat_id: int, max_messages: int = 20) -> list:
+        """
+        Загружает историю диалога из листа «💬 История диалогов»
+        и конвертирует её в формат Gemini: список {role, parts}.
+
+        Формат ячеек: "[HH:MM] 👤: текст"  или  "[HH:MM] 🤖: текст"
+        👤 → role="user", 🤖 → role="model"
+
+        Возвращает последние max_messages сообщений.
+        Если клиент не найден — возвращает [].
+        """
+        try:
+            row = self._hist_find_row(chat_id)
+            if row is None:
+                return []
+
+            row_values = self.hist.row_values(row)
+            # Сообщения начинаются с колонки C (индекс 2)
+            messages_raw = row_values[HIST_DATA_START - 1:]
+            messages_raw = [m for m in messages_raw if m.strip()]
+
+            # Берём последние max_messages
+            messages_raw = messages_raw[-max_messages:]
+
+            history = []
+            for cell_text in messages_raw:
+                # Формат: "[HH:MM] 👤: текст"
+                # Отрезаем метку времени "[HH:MM] "
+                if "] " in cell_text:
+                    rest = cell_text.split("] ", 1)[1]
+                else:
+                    rest = cell_text
+
+                if rest.startswith("👤:"):
+                    role = "user"
+                    text = rest[len("👤:"):].strip()
+                elif rest.startswith("🤖:"):
+                    role = "model"
+                    text = rest[len("🤖:"):].strip()
+                else:
+                    # Неизвестный формат — пропускаем
+                    continue
+
+                if text:
+                    history.append({"role": role, "parts": [{"text": text}]})
+
+            return history
+
+        except Exception as e:
+            logger.error(f"history_load_for_gemini error (chat_id={chat_id}): {e}")
+            return []
 
     def get_broadcast_data(self) -> tuple:
         """
