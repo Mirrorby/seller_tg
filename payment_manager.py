@@ -1,11 +1,8 @@
 """
-payment_manager.py — единая точка управления платежами.
+payment_manager.py — автоматические платежи: Lava.top и CryptoBot.
 
-Логика:
-- Клиент выбирает способ оплаты: 💳 Карта (Lava) или 🪙 Крипта (CryptoBot)
-- Для карты: создаём Lava-инвойс, отправляем ссылку, ждём webhook POST /lava-webhook
-- Для крипты: создаём CryptoBot-инвойс, отправляем ссылку, запускаем polling task
-- После успешной оплаты: активируем подписку в Sheets + уведомляем owner
+Вызывается из handlers.py в блоке tariff: callback.
+Возвращает HTML-строку с результатом (ссылка или ошибка).
 """
 
 import asyncio
@@ -13,7 +10,6 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import Config
@@ -23,255 +19,113 @@ from sheets_client import sheets
 
 logger = logging.getLogger(__name__)
 
-
-# ------------------------------------------------------------------ #
-# Тарифы                                                               #
-# ------------------------------------------------------------------ #
-
+# Тарифы (синхронизировать с TARIFF_DISPLAY в handlers.py)
 TARIFFS = {
-    "trial": {
-        "label": "Trial 3 дня",
-        "days": 3,
-        "price_usd": 0,         # бесплатно
-        "price_rub": 0,
-        "free": True,
-    },
-    "month": {
-        "label": "1 месяц",
-        "days": 30,
-        "price_usd": 19.0,
-        "price_rub": 1750,      # примерный курс, можно вынести в config
-        "free": False,
-    },
-    "quarter": {
-        "label": "3 месяца",
-        "days": 90,
-        "price_usd": 49.0,
-        "price_rub": 4500,
-        "free": False,
-    },
-    "half_year": {
-        "label": "6 месяцев",
-        "days": 180,
-        "price_usd": 89.0,
-        "price_rub": 8200,
-        "free": False,
-    },
+    '1m': {'label': '1 месяц',   'days': 30},
+    '3m': {'label': '3 месяца',  'days': 90},
+    '6m': {'label': '6 месяцев', 'days': 180},
 }
 
 
-# ------------------------------------------------------------------ #
-# Вспомогательные функции                                              #
-# ------------------------------------------------------------------ #
+# ══════════════════════════════════════════════════════════════════════════════
+# Lava.top (карта РФ — рубли)
+# ══════════════════════════════════════════════════════════════════════════════
 
-def _expires_date(days: int) -> str:
-    return (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
-
-
-async def _activate_subscription(
-    username: str,
-    tariff_key: str,
-    payment_method: str,   # "card_rub" | "crypto_usdt" | "trial"
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    """Активировать подписку в CRM и уведомить owner."""
-    tariff = TARIFFS[tariff_key]
-    today = datetime.now().strftime("%Y-%m-%d")
-    expires = _expires_date(tariff["days"])
-
-    status = "✅ Активен" if not tariff["free"] else "🔵 Триал"
-
-    sheets.upsert_client(
-        username,
-        subscribed="Да",
-        status=status,
-        connected_at=today,
-        tariff_days=str(tariff["days"]),
-        expires_at=expires,
-        comment=f"Оплата: {payment_method}",
-    )
-
-    # Уведомление owner
-    msg = (
-        f"💰 *Новая оплата*\n\n"
-        f"👤 {username}\n"
-        f"📦 Тариф: {tariff['label']}\n"
-        f"💳 Способ: {payment_method}\n"
-        f"📅 Активен до: {expires}\n"
-    )
-    try:
-        await context.bot.send_message(
-            chat_id=Config.OWNER_CHAT_ID,
-            text=msg,
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.error(f"Failed to notify owner on payment: {e}")
-
-    # Уведомление клиенту (если chat_id известен)
-    chat_id = sheets.history_get_client_chat_id(username)
-    if chat_id:
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"✅ Оплата подтверждена!\n\n"
-                    f"Тариф *{tariff['label']}* активирован до {expires}.\n"
-                    f"Добро пожаловать в Лид-витрину 🎉"
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"Failed to send activation message to {username}: {e}")
-
-
-# ------------------------------------------------------------------ #
-# Шаг 1: Клавиатура выбора тарифа                                     #
-# ------------------------------------------------------------------ #
-
-def build_tariff_keyboard() -> InlineKeyboardMarkup:
-    """Inline-клавиатура для выбора тарифа."""
-    buttons = []
-    for key, t in TARIFFS.items():
-        if t["free"]:
-            label = f"🎁 {t['label']} — бесплатно"
-        else:
-            label = f"📦 {t['label']} — ${t['price_usd']}"
-        buttons.append([InlineKeyboardButton(label, callback_data=f"tariff:{key}")])
-    return InlineKeyboardMarkup(buttons)
-
-
-# ------------------------------------------------------------------ #
-# Шаг 2: Клавиатура выбора способа оплаты                             #
-# ------------------------------------------------------------------ #
-
-def build_payment_method_keyboard(tariff_key: str) -> InlineKeyboardMarkup:
-    tariff = TARIFFS[tariff_key]
-    if tariff["free"]:
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎁 Активировать бесплатно", callback_data=f"pay:trial:{tariff_key}")]
-        ])
-
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                f"💳 Картой ({tariff['price_rub']} ₽)",
-                callback_data=f"pay:card:{tariff_key}",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                f"🪙 Крипта USDT ({tariff['price_usd']}$)",
-                callback_data=f"pay:crypto:{tariff_key}",
-            )
-        ],
-        [InlineKeyboardButton("◀ Назад", callback_data="pay:back")],
-    ])
-
-
-# ------------------------------------------------------------------ #
-# Шаг 3: Обработка callback-данных оплаты                             #
-# ------------------------------------------------------------------ #
-
-async def handle_payment_callback(
-    callback_data: str,
+async def handle_lava_payment(
+    *,
     username: str,
     email: str,
+    tariff_key: str,
+    tariff_name: str,
+    amount_usd: float,
+    amount_rub: int,
     context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
 ) -> str:
     """
-    Разобрать callback_data вида "pay:<method>:<tariff_key>".
-    Вернуть текст ответа пользователю.
+    Создать Lava-инвойс, вернуть HTML-строку с кнопкой оплаты.
     """
-    parts = callback_data.split(":")
-    if len(parts) < 3:
-        return "Неверный формат. Попробуйте снова."
+    try:
+        payment = await lava.create_payment(
+            email=email,
+            offer_id=Config.LAVA_OFFER_ID,
+            amount_usd=amount_usd,
+            currency="RUB",
+            payment_method="BANK131",
+            custom_fields={
+                "utm_source": "telegram_bot",
+                "utm_campaign": tariff_key,
+                "utm_content": username,
+            },
+        )
+        pay_url    = payment.get("paymentUrl", "")
+        invoice_id = payment.get("id", "")
 
-    _, method, tariff_key = parts[0], parts[1], parts[2]
-    tariff = TARIFFS.get(tariff_key)
-    if not tariff:
-        return "Тариф не найден."
+        # Сохраняем invoice_id в CRM для идентификации в webhook
+        sheets.upsert_client(username, comment=f"lava:{invoice_id}")
 
-    # --- Бесплатный триал ---
-    if method == "trial":
-        await _activate_subscription(username, tariff_key, "trial", context)
+        logger.info(f"Lava invoice for {username}: {invoice_id}")
         return (
-            f"🎁 Триал активирован!\n\n"
-            f"У вас 3 дня бесплатного доступа к Лид-витрине.\n"
-            f"Попробуйте — и вы не захотите отключаться 😊"
+            f'💳 <b>Оплата картой РФ</b>\n\n'
+            f'Тариф: <b>{tariff_name}</b> — <b>{amount_rub} ₽</b>\n\n'
+            f'👉 <a href="{pay_url}">Перейти к оплате</a>\n\n'
+            f'После оплаты подписка активируется автоматически.'
+        )
+    except Exception as e:
+        logger.error(f"Lava error for {username}: {e}")
+        raise
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Crypto Bot (USDT)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def handle_crypto_payment(
+    *,
+    username: str,
+    tariff_key: str,
+    tariff_name: str,
+    amount_usd: float,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> str:
+    """
+    Создать CryptoBot-инвойс, запустить фоновый поллинг, вернуть HTML-строку.
+    """
+    try:
+        inv = await crypto.create_subscription_invoice(
+            username=username,
+            tariff_label=tariff_name,
+            amount_usd=amount_usd,
+            asset="USDT",
+        )
+        pay_url    = inv.get("pay_url", "")
+        invoice_id = inv.get("invoice_id")
+
+        # Запускаем фоновый поллинг
+        asyncio.create_task(
+            _crypto_poll_task(
+                invoice_id=invoice_id,
+                username=username,
+                tariff_key=tariff_key,
+                context=context,
+            )
         )
 
-    # --- Карта (Lava.top) ---
-    if method == "card":
-        try:
-            payment = await lava.create_payment(
-                email=email,
-                offer_id=Config.LAVA_OFFER_ID,
-                amount_usd=tariff["price_usd"],
-                currency="RUB",
-                payment_method="BANK131",
-                custom_fields={
-                    "utm_source": "telegram_bot",
-                    "utm_campaign": tariff_key,
-                    "utm_content": username,
-                },
-            )
-            pay_url = payment.get("paymentUrl", "")
-            invoice_id = payment.get("id", "")
-
-            # Сохранить invoice_id в CRM для проверки webhook
-            sheets.upsert_client(username, comment=f"lava:{invoice_id}")
-
-            return (
-                f"💳 *Оплата картой*\n\n"
-                f"Тариф: {tariff['label']} — {tariff['price_rub']} ₽\n\n"
-                f"👉 [Перейти к оплате]({pay_url})\n\n"
-                f"После оплаты подписка активируется автоматически."
-            )
-        except Exception as e:
-            logger.error(f"Lava payment error for {username}: {e}")
-            return "⚠️ Ошибка при создании платежа. Попробуйте через несколько минут."
-
-    # --- Крипта (CryptoBot) ---
-    if method == "crypto":
-        try:
-            inv = await crypto.create_subscription_invoice(
-                username=username,
-                tariff_label=tariff["label"],
-                amount_usd=tariff["price_usd"],
-                asset="USDT",
-            )
-            pay_url = inv.get("pay_url", "")
-            invoice_id = inv.get("invoice_id")
-
-            # Запустить фоновый polling
-            asyncio.create_task(
-                _crypto_poll_task(
-                    invoice_id=invoice_id,
-                    username=username,
-                    tariff_key=tariff_key,
-                    context=context,
-                )
-            )
-
-            return (
-                f"🪙 *Оплата криптой (USDT)*\n\n"
-                f"Тариф: {tariff['label']} — {tariff['price_usd']} USDT\n\n"
-                f"👉 [Открыть в @CryptoBot]({pay_url})\n\n"
-                f"Ссылка действительна 24 часа.\n"
-                f"После оплаты подписка активируется автоматически."
-            )
-        except Exception as e:
-            logger.error(f"CryptoBot payment error for {username}: {e}")
-            return "⚠️ Ошибка при создании крипто-инвойса. Попробуйте через несколько минут."
-
-    return "Неизвестный способ оплаты."
+        logger.info(f"CryptoBot invoice for {username}: {invoice_id}")
+        return (
+            f'🪙 <b>Оплата USDT (CryptoBot)</b>\n\n'
+            f'Тариф: <b>{tariff_name}</b> — <b>{amount_usd} USDT</b>\n\n'
+            f'👉 <a href="{pay_url}">Открыть в @CryptoBot</a>\n\n'
+            f'Ссылка действительна 24 часа.\n'
+            f'После оплаты подписка активируется автоматически.'
+        )
+    except Exception as e:
+        logger.error(f"CryptoBot error for {username}: {e}")
+        raise
 
 
-# ------------------------------------------------------------------ #
-# Фоновая задача: ожидание крипто-оплаты                               #
-# ------------------------------------------------------------------ #
+# ══════════════════════════════════════════════════════════════════════════════
+# Фоновый поллинг крипто-инвойса
+# ══════════════════════════════════════════════════════════════════════════════
 
 async def _crypto_poll_task(
     invoice_id: int,
@@ -279,66 +133,105 @@ async def _crypto_poll_task(
     tariff_key: str,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    """
-    Фоновый поллинг инвойса CryptoBot.
-    При успехе активирует подписку.
-    """
-    logger.info(f"Starting crypto poll for {username}, invoice={invoice_id}")
-    paid_inv = await crypto.poll_until_paid(
-        invoice_id,
-        timeout=86400,
-        interval=30,
-    )
+    logger.info(f"Crypto poll started: {username} invoice={invoice_id}")
+    paid_inv = await crypto.poll_until_paid(invoice_id, timeout=86400, interval=30)
     if paid_inv:
-        await _activate_subscription(username, tariff_key, "crypto_usdt", context)
-        logger.info(f"Crypto payment confirmed for {username}")
+        await activate_subscription(username, tariff_key, "crypto_usdt", context)
     else:
-        logger.info(f"Crypto invoice {invoice_id} expired/timed-out for {username}")
+        logger.info(f"Crypto invoice {invoice_id} expired for {username}")
 
 
-# ------------------------------------------------------------------ #
-# Webhook-обработчик Lava (вызывается из webhook сервера)              #
-# ------------------------------------------------------------------ #
+# ══════════════════════════════════════════════════════════════════════════════
+# Webhook-обработчик Lava (вызывается из webhook_server.py)
+# ══════════════════════════════════════════════════════════════════════════════
 
-async def handle_lava_webhook(
-    payload: dict,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    """
-    Разобрать webhook Lava и активировать подписку.
-    Вызывается из FastAPI/aiohttp webhook endpoint.
-
-    Lava webhook eventType: "payment.success" / "payment.failed" / ...
-    """
+async def handle_lava_webhook(payload: dict, context):
     event = lava.parse_webhook_event(payload)
-    logger.info(f"Lava webhook: event={event['event_type']} invoice={event['invoice_id']}")
+    logger.info(f"Lava webhook: {event['event_type']} / {event['invoice_id']}")
 
     if event["event_type"] not in ("payment.success", "PAYMENT_SUCCESS"):
-        return  # игнорируем не-успешные события
-
-    # Найти username по invoice_id в CRM (сохранён в comment как "lava:<id>")
-    invoice_id = event["invoice_id"]
-    username = _find_username_by_lava_invoice(invoice_id)
-    if not username:
-        logger.warning(f"Lava webhook: no client found for invoice {invoice_id}")
         return
 
-    # Определить тариф по сумме (примерная логика)
-    amount = float(event.get("amount", 0))
-    tariff_key = _detect_tariff_by_amount_rub(amount)
+    invoice_id = event["invoice_id"]
+    username   = _find_username_by_lava_invoice(invoice_id)
+    if not username:
+        logger.warning(f"Lava webhook: клиент не найден для invoice {invoice_id}")
+        return
 
-    await _activate_subscription(username, tariff_key, "card_rub", context)
+    amount_rub = float(event.get("amount", 0))
+    tariff_key = _detect_tariff_by_amount_rub(amount_rub)
+    await activate_subscription(username, tariff_key, "card_rub_lava", context)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Активация подписки
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def activate_subscription(
+    username: str,
+    tariff_key: str,
+    payment_method: str,
+    context,
+):
+    tariff  = TARIFFS.get(tariff_key, TARIFFS['1m'])
+    today   = datetime.now().strftime("%Y-%m-%d")
+    expires = (datetime.now() + timedelta(days=tariff['days'])).strftime("%Y-%m-%d")
+
+    sheets.upsert_client(
+        username,
+        subscribed="Да",
+        status="✅ Активен",
+        connected_at=today,
+        tariff_days=str(tariff['days']),
+        expires_at=expires,
+        comment=f"Оплата: {payment_method}",
+    )
+    logger.info(f"Подписка активирована: {username} {tariff['label']} до {expires}")
+
+    # Уведомление owner
+    try:
+        await context.bot.send_message(
+            chat_id=Config.OWNER_CHAT_ID,
+            text=(
+                f'💰 <b>Новая оплата</b>\n\n'
+                f'👤 {username}\n'
+                f'📦 Тариф: {tariff["label"]}\n'
+                f'💳 Способ: {payment_method}\n'
+                f'📅 Активен до: {expires}'
+            ),
+            parse_mode='HTML',
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить owner об оплате: {e}")
+
+    # Уведомление клиенту
+    chat_id = sheets.history_get_client_chat_id(username)
+    if chat_id:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f'✅ <b>Оплата подтверждена!</b>\n\n'
+                    f'Тариф <b>{tariff["label"]}</b> активирован до {expires}.\n'
+                    f'Добро пожаловать в Лид-витрину 🎉'
+                ),
+                parse_mode='HTML',
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить активацию клиенту {username}: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Вспомогательные функции
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _find_username_by_lava_invoice(invoice_id: str) -> Optional[str]:
-    """Найти username в CRM по сохранённому lava invoice_id в колонке comment."""
     try:
         search_str = f"lava:{invoice_id}"
-        all_rows = sheets.crm.get_all_values()
-        from config import Config as C
-        for row in all_rows[C.CRM_DATA_START_ROW - 1:]:
-            comment_col = 17 - 1  # Q = 17, 0-indexed
-            username_col = 2 - 1   # B = 2, 0-indexed
+        all_rows   = sheets.crm.get_all_values()
+        for row in all_rows[Config.CRM_DATA_START_ROW - 1:]:
+            comment_col  = 16  # Q=17, 0-indexed=16
+            username_col = 1   # B=2,  0-indexed=1
             if len(row) > comment_col and search_str in row[comment_col]:
                 return row[username_col]
     except Exception as e:
@@ -347,12 +240,9 @@ def _find_username_by_lava_invoice(invoice_id: str) -> Optional[str]:
 
 
 def _detect_tariff_by_amount_rub(amount_rub: float) -> str:
-    """Определить тариф по сумме в рублях (для webhook без явного тарифа)."""
-    if amount_rub <= 0:
-        return "trial"
-    elif amount_rub < 3000:
-        return "month"
-    elif amount_rub < 6000:
-        return "quarter"
+    if amount_rub < 2000:
+        return '1m'
+    elif amount_rub < 4500:
+        return '3m'
     else:
-        return "half_year"
+        return '6m'
