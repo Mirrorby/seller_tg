@@ -18,21 +18,6 @@ from payment_manager import (
 
 logger = logging.getLogger(__name__)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Реквизиты для ручной оплаты (fallback — если авто-методы недоступны)
-# ══════════════════════════════════════════════════════════════════════════════
-
-PAYMENT_DETAILS_MANUAL = {
-    'card_ru_manual': (
-        '💳 <b>Перевод на карту РФ</b>\n\n'
-        'Номер телефона (СБП / Тинькофф):\n'
-        '<code>+79183895663</code>\n\n'
-        'Получатель: Никита К.\n\n'
-        '📸 После оплаты пришлите скриншот перевода — '
-        'мы проверим и откроем доступ в течение нескольких часов.'
-    ),
-}
-
 # Тарифы с ценами в рублях и долларах
 TARIFF_DISPLAY = {
     '1m': ('1 месяц',   '$19',  '1 349 ₽', 19.0,  1349),
@@ -166,7 +151,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _notify_owner(context, username, user_id, f'💬 Отзыв/мнение:\n{text}')
         return
 
-    # Ждём скриншот только для ручного card_ru_manual
+    # Ждём скриншот
     if state and state.startswith('waiting_screenshot'):
         await update.message.reply_text(
             '📸 Пожалуйста, пришлите именно скриншот (изображение), а не текст.'
@@ -340,7 +325,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = _user_state.get(user_id, '')
 
-    # Ждём скриншот только при ручной оплате card_ru_manual
+    # Ждём скриншот
     if state.startswith('waiting_screenshot'):
         _user_state.pop(user_id, None)
         await update.message.reply_text(
@@ -419,10 +404,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '💳 <b>Выберите способ оплаты:</b>',
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton('🪙 USDT (авто)',          callback_data='paymethod:crypto')],
-                [InlineKeyboardButton('💳 Карта РФ (авто)',      callback_data='paymethod:card_lava')],
-                [InlineKeyboardButton('💳 Карта РФ (перевод)',   callback_data='paymethod:card_ru_manual')],
-                [InlineKeyboardButton('↩️ Главное меню',         callback_data='menu:main')],
+                [InlineKeyboardButton('💳 Оплата картой',  callback_data='paymethod:card_lava')],
+                [InlineKeyboardButton('🪙 Оплата криптой', callback_data='paymethod:crypto')],
+                [InlineKeyboardButton('↩️ Главное меню',   callback_data='menu:main')],
             ]),
         )
         await _notify_owner(context, username, user_id, '💳 Нажал «Оплатить подписку»')
@@ -433,22 +417,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method = data.split(':')[1]
         _user_state[user_id] = f'paymethod_chosen:{method}'
 
-        if method == 'card_ru_manual':
-            # Ручная оплата — показываем рублёвые цены
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton('1 месяц — 1 349 ₽',                                  callback_data=f'tariff:{method}:1m')],
-                [InlineKeyboardButton('3 месяца — 3 499 ₽ (1 166 ₽/мес)',                   callback_data=f'tariff:{method}:3m')],
-                [InlineKeyboardButton('6 месяцев — 6 299 ₽ (1 050 ₽/мес)',                  callback_data=f'tariff:{method}:6m')],
-                [InlineKeyboardButton('↩️ Назад',                                            callback_data='intent:pay')],
-            ])
-        else:
-            # Авто (крипта и Lava) — долларовые цены
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton('1 месяц — $19',                                       callback_data=f'tariff:{method}:1m')],
-                [InlineKeyboardButton('3 месяца — $49 ($16.3/мес)',                          callback_data=f'tariff:{method}:3m')],
-                [InlineKeyboardButton('6 месяцев — $89 ($14.8/мес)',                         callback_data=f'tariff:{method}:6m')],
-                [InlineKeyboardButton('↩️ Назад',                                            callback_data='intent:pay')],
-            ])
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton('1 месяц — $19',             callback_data=f'tariff:{method}:1m')],
+            [InlineKeyboardButton('3 месяца — $49',            callback_data=f'tariff:{method}:3m')],
+            [InlineKeyboardButton('6 месяцев — $89',           callback_data=f'tariff:{method}:6m')],
+            [InlineKeyboardButton('↩️ Назад',                   callback_data='intent:pay')],
+        ])
 
         await query.edit_message_text(
             '📋 <b>Выберите тариф:</b>',
@@ -470,22 +444,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'💰 Выбрал тариф: {tariff_name} | способ: {method}'
         )
 
-        # ── Ручная оплата картой РФ (скриншот) ──────────────────────────────
-        if method == 'card_ru_manual':
-            _user_state[user_id] = f'waiting_screenshot:{method}_{tariff_key}'
-            await query.edit_message_text(
-                f'✅ Вы выбрали:\n'
-                f'📋 Тариф: <b>{tariff_name}</b> — <b>{price_rub}</b>\n\n'
-                f'{PAYMENT_DETAILS_MANUAL["card_ru_manual"]}',
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
-                ]),
-            )
-            return
-
-        # ── Авто-оплата: создаём инвойс ──────────────────────────────────────
-        await query.edit_message_text('⏳ Создаю ссылку на оплату...')
+        # ── Создаём инвойс ────────────────────────────────────────────────────
+                await query.edit_message_text('⏳ Создаю ссылку на оплату...')
 
         try:
             if method == 'crypto':
