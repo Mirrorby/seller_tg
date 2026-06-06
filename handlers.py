@@ -18,11 +18,12 @@ from payment_manager import (
 
 logger = logging.getLogger(__name__)
 
-# Тарифы с ценами в долларах
+# Тарифы с ценами в рублях и долларах
+# Тарифы: (label, price_str, amount_usd)
 TARIFF_DISPLAY = {
-    '1m': ('1 месяц',   '$19'),
-    '3m': ('3 месяца',  '$49'),
-    '6m': ('6 месяцев', '$89'),
+    '1m': ('1 месяц',   '$19', 19.0),
+    '3m': ('3 месяца',  '$49', 49.0),
+    '6m': ('6 месяцев', '$89', 89.0),
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -151,12 +152,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _notify_owner(context, username, user_id, f'💬 Отзыв/мнение:\n{text}')
         return
 
-    # Ждём скриншот
-    if state and state.startswith('waiting_screenshot'):
-        await update.message.reply_text(
-            '📸 Пожалуйста, пришлите именно скриншот (изображение), а не текст.'
-        )
-        return
 
     is_new = user_id not in _registered
     if is_new:
@@ -309,59 +304,6 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Входящие фото (скриншот ручной оплаты)
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
-    user     = update.effective_user
-    user_id  = user.id
-    username = _get_username(user)
-
-    if user_id == Config.OWNER_CHAT_ID:
-        return
-
-    state = _user_state.get(user_id, '')
-
-    # Ждём скриншот
-    if state.startswith('waiting_screenshot'):
-        _user_state.pop(user_id, None)
-        await update.message.reply_text(
-            '✅ Скриншот получен!\n\n'
-            'Менеджер проверит оплату и откроет вам доступ '
-            'в течение нескольких часов. Если возникнут вопросы — '
-            'с вами свяжутся.'
-        )
-        try:
-            await context.bot.forward_message(
-                chat_id=Config.OWNER_CHAT_ID,
-                from_chat_id=update.message.chat_id,
-                message_id=update.message.message_id,
-            )
-            await context.bot.send_message(
-                chat_id=Config.OWNER_CHAT_ID,
-                text=(
-                    f'📸 Скриншот оплаты\n'
-                    f'👤 {username} (id: <code>{user_id}</code>)\n'
-                    f'Способ: {state.replace("waiting_screenshot:", "")}'
-                ),
-                parse_mode='HTML',
-            )
-        except Exception as e:
-            logger.error(f'Ошибка пересылки скриншота: {e}')
-    else:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton('💳 Оплатить подписку', callback_data='intent:pay')],
-        ])
-        await update.message.reply_text(
-            'Получил фото. Если хотите оплатить подписку — воспользуйтесь кнопкой ниже.',
-            reply_markup=keyboard,
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # Callback-кнопки
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -419,9 +361,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton('1 месяц — $19',             callback_data=f'tariff:{method}:1m')],
-            [InlineKeyboardButton('3 месяца — $49 (-14%)',            callback_data=f'tariff:{method}:3m')],
-            [InlineKeyboardButton('6 месяцев — $89 (-20%)',           callback_data=f'tariff:{method}:6m')],
-            [InlineKeyboardButton('↩️ Назад',                   callback_data='intent:pay')],
+            [InlineKeyboardButton('3 месяца — $49 (-14%)',     callback_data=f'tariff:{method}:3m')],
+            [InlineKeyboardButton('6 месяцев — $89 (-20%)',    callback_data=f'tariff:{method}:6m')],
+            [InlineKeyboardButton('↩️ Назад',                  callback_data='intent:pay')],
         ])
 
         await query.edit_message_text(
@@ -437,7 +379,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts  = data.split(':')
         method = parts[1]
         tariff_key = parts[2]
-        tariff_name, price_usd, price_rub, amount_usd, amount_rub = TARIFF_DISPLAY[tariff_key]
+        tariff_name, price_usd, amount_usd = TARIFF_DISPLAY[tariff_key]
 
         await _notify_owner(
             context, username, user_id,
@@ -463,7 +405,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tariff_key=tariff_key,
                     tariff_name=tariff_name,
                     amount_usd=amount_usd,
-                    amount_rub=amount_rub,
                     context=context,
                 )
             else:
