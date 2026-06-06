@@ -362,7 +362,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton('1 месяц — $19',             callback_data=f'tariff:{method}:1m')],
             [InlineKeyboardButton('3 месяца — $49 (-14%)',     callback_data=f'tariff:{method}:3m')],
-            [InlineKeyboardButton('6 месяцев — $89 (-20%)',    callback_data=f'tariff:{method}:6m')],
+            [InlineKeyboardButton('6 месяцев — $89 (-29%)',    callback_data=f'tariff:{method}:6m')],
             [InlineKeyboardButton('↩️ Назад',                  callback_data='intent:pay')],
         ])
 
