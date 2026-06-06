@@ -2,6 +2,17 @@ import logging
 import google.generativeai as genai
 from config import Config
 
+# Импорт sheets_client отложен (lazy) чтобы избежать circular import.
+# Используется только в методе chat() для загрузки истории.
+_sheets = None
+
+def _get_sheets():
+    global _sheets
+    if _sheets is None:
+        from sheets_client import sheets as _s
+        _sheets = _s
+    return _sheets
+
 logger = logging.getLogger(__name__)
 
 genai.configure(api_key=Config.GEMINI_API_KEY)
@@ -145,11 +156,37 @@ class GeminiClient:
         self._histories.pop(user_id, None)
 
     async def chat(self, user_id: int, message: str) -> tuple[str, bool, bool]:
+        """
+        Основной диалог с риэлтором.
+
+        Источник истории (приоритет):
+          1. RAM (_histories) — если уже есть, используем напрямую
+          2. Google Sheets (💬 История диалогов) — загружаем при первом обращении
+             после рестарта, конвертируем в Gemini-формат и кэшируем в RAM.
+
+        Возвращает: (reply, needs_owner_takeover, trial_link_sent)
+        """
         history = self.get_history(user_id)
+
+        if not history:
+            # История в RAM пуста — пробуем загрузить из Sheets
+            try:
+                sheets_history = _get_sheets().history_load_for_gemini(user_id)
+                if sheets_history:
+                    self._histories[user_id] = sheets_history
+                    history = sheets_history
+                    logger.info(
+                        f"📖 История загружена из Sheets для user_id={user_id} "
+                        f"({len(sheets_history)} сообщений)"
+                    )
+            except Exception as e:
+                logger.warning(f"Не удалось загрузить историю из Sheets: {e}")
+
         session = self._sales_model.start_chat(history=history)
         response = await session.send_message_async(message)
         reply = response.text.strip()
 
+        # Сохраняем обновлённую историю в RAM (последние 20 сообщений)
         self._histories[user_id] = list(session.history)[-20:]
 
         needs_takeover   = any(p in reply.lower() for p in OWNER_SIGNAL_PHRASES)
