@@ -1,4 +1,7 @@
+import asyncio
 import logging
+
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -7,12 +10,14 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import NetworkError, TimedOut
+
 from config import Config
 from handlers import (
     handle_message, handle_business_message, handle_start,
     handle_callback, handle_photo, handle_broadcast,
 )
 from scheduler import start_scheduler
+from webhook_server import set_bot_context, start_webhook_server
 
 logging.basicConfig(
     format="%(asctime)s  %(levelname)s  [%(name)s]  %(message)s",
@@ -26,6 +31,7 @@ logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING)
 logging.getLogger("google.auth").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,31 @@ async def post_init(application: Application) -> None:
     await application.bot.delete_webhook(drop_pending_updates=True)
     start_scheduler(application)
     logger.info("Scheduler запущен")
+
+    # Webhook сервер для Lava
+    runner = await start_webhook_server()
+    application.bot_data["webhook_runner"] = runner
+
+    # Передаём bot в webhook_server
+    class _Ctx:
+        def __init__(self, bot):
+            self.bot = bot
+    set_bot_context(_Ctx(application.bot))
+
+
+async def post_shutdown(application: Application) -> None:
+    runner = application.bot_data.get("webhook_runner")
+    if runner:
+        await runner.cleanup()
+        logger.info("Webhook server остановлен")
+
+    # Закрыть aiohttp-сессии платёжных клиентов
+    try:
+        from crypto_client import crypto
+        from lava_client import lava
+        await asyncio.gather(crypto.close(), lava.close(), return_exceptions=True)
+    except Exception as e:
+        logger.error(f"Ошибка закрытия платёжных клиентов: {e}")
 
 
 async def error_handler(update, context) -> None:
@@ -49,6 +80,7 @@ def main() -> None:
         Application.builder()
         .token(Config.BOT_TOKEN)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .read_timeout(30)
         .connect_timeout(30)
         .build()
@@ -68,7 +100,7 @@ def main() -> None:
     app.add_handler(CommandHandler("broadcast", handle_broadcast))
     app.add_error_handler(error_handler)
 
-    logger.info("🤖 Бот запущен и ждёт сообщений")
+    logger.info("🤖 Бот запущен")
     app.run_polling(
         drop_pending_updates=True,
         allowed_updates=[

@@ -10,23 +10,20 @@ from telegram.ext import ContextTypes
 from gemini_client import gemini
 from sheets_client import sheets
 from config import Config
+from payment_manager import (
+    TARIFFS,
+    handle_lava_payment,
+    handle_crypto_payment,
+)
 
 logger = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Реквизиты для оплаты
+# Реквизиты для ручной оплаты (fallback — если авто-методы недоступны)
 # ══════════════════════════════════════════════════════════════════════════════
 
-PAYMENT_DETAILS = {
-    'crypto': (
-        '💎 <b>Оплата USDT (TRC-20)</b>\n\n'
-        'Адрес кошелька:\n'
-        '<code>TDCSKh4MjamhHLKQkuN5d4vuhXcM4R2SBz</code>\n\n'
-        'Сеть: TRC-20 (Tron)\n\n'
-        '📸 После оплаты пришлите скриншот транзакции — '
-        'мы проверим и откроем доступ в течение нескольких часов.'
-    ),
-    'card_ru': (
+PAYMENT_DETAILS_MANUAL = {
+    'card_ru_manual': (
         '💳 <b>Перевод на карту РФ</b>\n\n'
         'Номер телефона (СБП / Тинькофф):\n'
         '<code>+79183895663</code>\n\n'
@@ -34,21 +31,13 @@ PAYMENT_DETAILS = {
         '📸 После оплаты пришлите скриншот перевода — '
         'мы проверим и откроем доступ в течение нескольких часов.'
     ),
-    # 'card_foreign': (
-    #     '🌍 <b>Перевод на зарубежную карту</b>\n\n'
-    #     'IBAN / номер карты:\n'
-    #     '<code>ЗАГЛУШКА_РЕКВИЗИТЫ_ЗАРУБЕЖНОЙ_КАРТЫ</code>\n\n'
-    #     'Банк: ЗАГЛУШКА_БАНК\n'
-    #     'Получатель: ЗАГЛУШКА_ИМЯ\n\n'
-    #     '📸 После оплаты пришлите скриншот перевода — '
-    #     'мы проверим и откроем доступ в течение нескольких часов.'
-    # ),
 }
 
-TARIFFS = {
-    '1m': ('1 месяц',   '$19', '1 349 ₽'),
-    '3m': ('3 месяца',  '$48', '3 399 ₽'),
-    '6m': ('6 месяцев', '$69', '4 899 ₽'),
+# Тарифы с ценами в рублях и долларах
+TARIFF_DISPLAY = {
+    '1m': ('1 месяц',   '$19',  '1 349 ₽', 19.0,  1349),
+    '3m': ('3 месяца',  '$48',  '3 399 ₽', 48.0,  3399),
+    '6m': ('6 месяцев', '$69',  '4 899 ₽', 69.0,  4899),
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -60,7 +49,7 @@ _registered:   set[int] = set()
 _offer_marked: set[int] = set()
 _trial_marked: set[int] = set()
 
-# Дебаунс: накапливаем сообщения от одного пользователя
+# Дебаунс
 DEBOUNCE_SECONDS = 4
 MAX_WAIT_SECONDS = 10
 
@@ -77,6 +66,12 @@ def _typing_delay(text: str) -> float:
     base    = random.uniform(4.0, 8.0)
     per_chr = len(text) * 0.03
     return min(base + per_chr, 18.0)
+
+
+def _make_email(username: str) -> str:
+    """Синтетический email для Lava API."""
+    clean = username.lstrip("@").replace(" ", "_")
+    return f"{clean}@{Config.DEFAULT_EMAIL_DOMAIN}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -107,7 +102,8 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '👋 Добро пожаловать в бот поддержки сервиса Лид-витрина!\n\nЧем могу помочь?',
         reply_markup=keyboard,
     )
-    
+
+
 async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Запускает рассылку в группы. Только для владельца."""
     user_id = update.effective_user.id
@@ -122,8 +118,8 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Ошибка отправки прогресса: {e}")
 
-    # Запускаем рассылку в фоне — бот не блокируется
     asyncio.create_task(run_broadcast(progress_callback=send_progress))
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Обычные сообщения боту напрямую
@@ -143,7 +139,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = _user_state.get(user_id)
 
-    # Человек прислал вопрос
     if state == 'waiting_question':
         _user_state.pop(user_id, None)
         keyboard = InlineKeyboardMarkup([
@@ -157,7 +152,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _notify_owner(context, username, user_id, f'❓ Вопрос:\n{text}')
         return
 
-    # Человек поделился мнением
     if state == 'waiting_feedback':
         _user_state.pop(user_id, None)
         keyboard = InlineKeyboardMarkup([
@@ -172,14 +166,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _notify_owner(context, username, user_id, f'💬 Отзыв/мнение:\n{text}')
         return
 
-    # Человек прислал текст вместо скриншота
+    # Ждём скриншот только для ручного card_ru_manual
     if state and state.startswith('waiting_screenshot'):
         await update.message.reply_text(
             '📸 Пожалуйста, пришлите именно скриншот (изображение), а не текст.'
         )
         return
 
-    # Новый контакт или любое другое сообщение — регистрируем и отвечаем через Gemini
     is_new = user_id not in _registered
     if is_new:
         _registered.add(user_id)
@@ -195,7 +188,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         logger.info(f"💬 {username} пишет: {text[:80]}")
 
-   # Дебаунс: накапливаем сообщения, ждём паузы перед ответом
     now = asyncio.get_event_loop().time()
     if user_id not in _pending_messages:
         _pending_messages[user_id] = []
@@ -237,7 +229,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Сообщения через Secretary Mode (business_message)
+# Secretary Mode (business_message)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -330,8 +322,9 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
 
     _debounce_tasks[user_id] = asyncio.create_task(_flush_business())
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Входящие фото (скриншот оплаты)
+# Входящие фото (скриншот ручной оплаты)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -347,6 +340,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = _user_state.get(user_id, '')
 
+    # Ждём скриншот только при ручной оплате card_ru_manual
     if state.startswith('waiting_screenshot'):
         _user_state.pop(user_id, None)
         await update.message.reply_text(
@@ -356,11 +350,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'с вами свяжутся.'
         )
         try:
-            caption = (
-                f'📸 Скриншот оплаты\n'
-                f'👤 {username} (id: {user_id})\n'
-                f'Способ: {state.replace("waiting_screenshot:", "")}'
-            )
             await context.bot.forward_message(
                 chat_id=Config.OWNER_CHAT_ID,
                 from_chat_id=update.message.chat_id,
@@ -368,19 +357,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await context.bot.send_message(
                 chat_id=Config.OWNER_CHAT_ID,
-                text=caption,
+                text=(
+                    f'📸 Скриншот оплаты\n'
+                    f'👤 {username} (id: <code>{user_id}</code>)\n'
+                    f'Способ: {state.replace("waiting_screenshot:", "")}'
+                ),
+                parse_mode='HTML',
             )
         except Exception as e:
             logger.error(f'Ошибка пересылки скриншота: {e}')
     else:
-        await update.message.reply_text(
-            'Получил фото. Если хотите оплатить подписку — '
-            'воспользуйтесь кнопкой ниже.'
-        )
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton('💳 Оплатить подписку', callback_data='intent:pay')],
         ])
-        await update.message.reply_text('👇', reply_markup=keyboard)
+        await update.message.reply_text(
+            'Получил фото. Если хотите оплатить подписку — воспользуйтесь кнопкой ниже.',
+            reply_markup=keyboard,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -396,62 +389,65 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = _get_username(user)
     data     = query.data
 
+    # ── Намерение: задать вопрос ─────────────────────────────────────────────
     if data == 'intent:question':
         _user_state[user_id] = 'waiting_question'
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
-        ])
         await query.edit_message_text(
             '✍️ Напишите ваш вопрос — я передам его менеджеру.',
-            reply_markup=keyboard,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+            ]),
         )
         await _notify_owner(context, username, user_id, '❓ Нажал «Задать вопрос»')
         return
 
+    # ── Намерение: отзыв ─────────────────────────────────────────────────────
     if data == 'intent:feedback':
         _user_state[user_id] = 'waiting_feedback'
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
-        ])
         await query.edit_message_text(
             '✍️ Напишите ваше мнение или отзыв — нам важна любая обратная связь.',
-            reply_markup=keyboard,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+            ]),
         )
         await _notify_owner(context, username, user_id, '💬 Нажал «Поделиться мнением»')
         return
 
+    # ── Намерение: оплатить ──────────────────────────────────────────────────
     if data == 'intent:pay':
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton('💎 USDT (крипта)',       callback_data='paymethod:crypto')],
-            [InlineKeyboardButton('💳 Карта РФ (перевод)',  callback_data='paymethod:card_ru')],
-            # [InlineKeyboardButton('🌍 Карта зарубежного банка', callback_data='paymethod:card_foreign')],
-            [InlineKeyboardButton('↩️ Главное меню',        callback_data='menu:main')],
-        ])
         await query.edit_message_text(
             '💳 <b>Выберите способ оплаты:</b>',
             parse_mode='HTML',
-            reply_markup=keyboard,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('🪙 USDT (авто)',          callback_data='paymethod:crypto')],
+                [InlineKeyboardButton('💳 Карта РФ (авто)',      callback_data='paymethod:card_lava')],
+                [InlineKeyboardButton('💳 Карта РФ (перевод)',   callback_data='paymethod:card_ru_manual')],
+                [InlineKeyboardButton('↩️ Главное меню',         callback_data='menu:main')],
+            ]),
         )
         await _notify_owner(context, username, user_id, '💳 Нажал «Оплатить подписку»')
         return
 
+    # ── Выбор способа оплаты → показ тарифов ────────────────────────────────
     if data.startswith('paymethod:'):
         method = data.split(':')[1]
         _user_state[user_id] = f'paymethod_chosen:{method}'
 
-        if method == 'card_ru':
+        if method == 'card_ru_manual':
+            # Ручная оплата — показываем рублёвые цены
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton('1 месяц — 1 349 ₽',                          callback_data=f'tariff:{method}:1m')],
-                [InlineKeyboardButton('3 месяца — 3 399 ₽ (1 133 ₽/мес вместо 1 349 ₽)', callback_data=f'tariff:{method}:3m')],
-                [InlineKeyboardButton('6 месяцев — 4 899 ₽ (817 ₽/мес вместо 1 349 ₽)',  callback_data=f'tariff:{method}:6m')],
-                [InlineKeyboardButton('↩️ Назад', callback_data='intent:pay')],
+                [InlineKeyboardButton('1 месяц — 1 349 ₽',                                  callback_data=f'tariff:{method}:1m')],
+                [InlineKeyboardButton('3 месяца — 3 399 ₽ (1 133 ₽/мес)',                   callback_data=f'tariff:{method}:3m')],
+                [InlineKeyboardButton('6 месяцев — 4 899 ₽ (817 ₽/мес)',                    callback_data=f'tariff:{method}:6m')],
+                [InlineKeyboardButton('↩️ Назад',                                            callback_data='intent:pay')],
             ])
         else:
+            # Авто (крипта и Lava) — долларовые цены
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton('1 месяц — $19',                    callback_data=f'tariff:{method}:1m')],
-                [InlineKeyboardButton('3 месяца — $48 ($16/мес вместо $19)',   callback_data=f'tariff:{method}:3m')],
-                [InlineKeyboardButton('6 месяцев — $69 ($11.5/мес вместо $19)', callback_data=f'tariff:{method}:6m')],
-                [InlineKeyboardButton('↩️ Назад', callback_data='intent:pay')],
+                [InlineKeyboardButton('1 месяц — $19',                                       callback_data=f'tariff:{method}:1m')],
+                [InlineKeyboardButton('3 месяца — $48 ($16/мес)',                            callback_data=f'tariff:{method}:3m')],
+                [InlineKeyboardButton('6 месяцев — $69 ($11.5/мес)',                         callback_data=f'tariff:{method}:6m')],
+                [InlineKeyboardButton('↩️ Назад',                                            callback_data='intent:pay')],
             ])
 
         await query.edit_message_text(
@@ -459,48 +455,91 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML',
             reply_markup=keyboard,
         )
-        await _notify_owner(context, username, user_id, f'💳 Выбрал способ оплаты: {method}')
+        await _notify_owner(context, username, user_id, f'💳 Выбрал способ: {method}')
         return
 
+    # ── Выбор тарифа ─────────────────────────────────────────────────────────
     if data.startswith('tariff:'):
-        _, method, tariff_key = data.split(':')
-        tariff_name, price_usd, price_rub = TARIFFS[tariff_key]
-        price        = price_rub if method == 'card_ru' else price_usd
-        payment_text = PAYMENT_DETAILS.get(method, '⚠️ Реквизиты не заданы')
+        parts  = data.split(':')
+        method = parts[1]
+        tariff_key = parts[2]
+        tariff_name, price_usd, price_rub, amount_usd, amount_rub = TARIFF_DISPLAY[tariff_key]
 
-        _user_state[user_id] = f'waiting_screenshot:{method}_{tariff_key}'
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
-        ])
-        await query.edit_message_text(
-            f'✅ Отлично! Вы выбрали:\n'
-            f'📋 Тариф: <b>{tariff_name}</b> — <b>{price}</b>\n\n'
-            f'{payment_text}',
-            parse_mode='HTML',
-            reply_markup=keyboard,
-        )
         await _notify_owner(
             context, username, user_id,
-            f'💰 Выбрал тариф: {tariff_name} {price} | способ: {method}'
+            f'💰 Выбрал тариф: {tariff_name} | способ: {method}'
         )
+
+        # ── Ручная оплата картой РФ (скриншот) ──────────────────────────────
+        if method == 'card_ru_manual':
+            _user_state[user_id] = f'waiting_screenshot:{method}_{tariff_key}'
+            await query.edit_message_text(
+                f'✅ Вы выбрали:\n'
+                f'📋 Тариф: <b>{tariff_name}</b> — <b>{price_rub}</b>\n\n'
+                f'{PAYMENT_DETAILS_MANUAL["card_ru_manual"]}',
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+                ]),
+            )
+            return
+
+        # ── Авто-оплата: создаём инвойс ──────────────────────────────────────
+        await query.edit_message_text('⏳ Создаю ссылку на оплату...')
+
+        try:
+            if method == 'crypto':
+                result_text = await handle_crypto_payment(
+                    username=username,
+                    tariff_key=tariff_key,
+                    tariff_name=tariff_name,
+                    amount_usd=amount_usd,
+                    context=context,
+                )
+            elif method == 'card_lava':
+                result_text = await handle_lava_payment(
+                    username=username,
+                    email=_make_email(username),
+                    tariff_key=tariff_key,
+                    tariff_name=tariff_name,
+                    amount_usd=amount_usd,
+                    amount_rub=amount_rub,
+                    context=context,
+                )
+            else:
+                result_text = '⚠️ Неизвестный способ оплаты.'
+        except Exception as e:
+            logger.error(f"Ошибка создания инвойса для {username}: {e}")
+            result_text = '⚠️ Ошибка при создании платежа. Попробуйте через несколько минут.'
+
+        await query.edit_message_text(
+            result_text,
+            parse_mode='HTML',
+            disable_web_page_preview=False,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
+            ]),
+        )
+
+        sheets.upsert_client(username, offer="Да")
         return
-        
+
+    # ── Главное меню ─────────────────────────────────────────────────────────
     if data == 'menu:main':
         _user_state.pop(user_id, None)
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton('❓ Задать вопрос',      callback_data='intent:question')],
-            [InlineKeyboardButton('💬 Поделиться мнением', callback_data='intent:feedback')],
-            [InlineKeyboardButton('💳 Оплатить подписку',  callback_data='intent:pay')],
-        ])
         await query.edit_message_text(
             '👋 Чем могу помочь?',
-            reply_markup=keyboard,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('❓ Задать вопрос',      callback_data='intent:question')],
+                [InlineKeyboardButton('💬 Поделиться мнением', callback_data='intent:feedback')],
+                [InlineKeyboardButton('💳 Оплатить подписку',  callback_data='intent:pay')],
+            ]),
         )
         return
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Обновление этапов CRM
+# CRM этапы воронки
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _update_crm_stage(user_id: int, username: str, reply: str, trial_link_sent: bool):
@@ -519,7 +558,7 @@ def _update_crm_stage(user_id: int, username: str, reply: str, trial_link_sent: 
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Уведомление владельца о горячем лиде
+# Уведомления владельца
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _notify_owner_takeover(
@@ -544,10 +583,6 @@ async def _notify_owner_takeover(
     except Exception as e:
         logger.error(f"Не удалось отправить уведомление владельцу: {e}")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Уведомление владельца (общее)
-# ══════════════════════════════════════════════════════════════════════════════
 
 async def _notify_owner(
     context: ContextTypes.DEFAULT_TYPE,

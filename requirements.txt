@@ -1,7 +1,22 @@
-python-telegram-bot==21.9
-google-generativeai==0.7.2
-gspread==6.1.2
-google-auth==2.32.0
-apscheduler==3.10.4
+# Core
+python-telegram-bot==21.6
 python-dotenv==1.0.1
-telethon==1.36.0
+
+# Gemini
+google-generativeai==0.7.2
+
+# Google Sheets
+gspread==6.1.2
+google-auth==2.29.0
+
+# Scheduler
+APScheduler==3.10.4
+
+# Lava.top (карточная оплата)
+aiohttp==3.9.5          # async HTTP клиент — используется и для Lava и для webhook сервера
+
+# Crypto Bot (крипто-оплата)
+# нет отдельной зависимости — используем aiohttp напрямую
+
+# lava-top-sdk не используем — async клиент написан вручную в lava_client.py
+# (синхронный SDK блокирует event loop)
