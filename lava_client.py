@@ -2,7 +2,7 @@
 lava_client.py — интеграция с Lava.top
 
 Правильный endpoint (из официальной документации):
-  POST https://gate.lava.top/api/v2/invoice
+  POST https://gate.lava.top/api/v3/invoice
   Header: X-Api-Key: <ключ>
 
 Тело запроса: email, offerId, currency, buyerLanguage
@@ -55,9 +55,8 @@ class LavaClient:
         *,
         email: str,
         offer_id: str,
-        amount_usd: float,          # не используется напрямую — цена берётся из оффера
-        currency: str = "USD",      # "RUB" | "USD" | "EUR"
-        payment_method: str = "",
+        amount_usd: float,
+        currency: str = "USD",
         custom_fields: Optional[dict] = None,
     ) -> dict:
         body: dict = {
@@ -65,15 +64,15 @@ class LavaClient:
             "offerId": offer_id,
             "currency": currency,
             "buyerLanguage": "RU",
+            "paymentProvider": "UNLIMIT",
+            "paymentMethod": "CARD",
+            "periodicity": "MONTHLY",
         }
-        # paymentMethod опционален — если не указан, Lava покажет все доступные
-        if payment_method:
-            body["paymentMethod"] = payment_method
-
+    
         if custom_fields:
             body["clientUtm"] = custom_fields
-
-        url = f"{LAVA_BASE}/api/v2/invoice"
+    
+        url = f"{LAVA_BASE}/api/v3/invoice"  # v3 !
         try:
             async with self.session.post(url, json=body) as resp:
                 raw = await resp.text()
