@@ -56,7 +56,7 @@ class LavaClient:
         email: str,
         offer_id: str,
         amount_usd: float,          # не используется напрямую — цена берётся из оффера
-        currency: str = "RUB",      # "RUB" | "USD" | "EUR"
+        currency: str = "USD",      # "RUB" | "USD" | "EUR"
         payment_method: str = "",
         custom_fields: Optional[dict] = None,
     ) -> dict:
