@@ -36,8 +36,8 @@ PAYMENT_DETAILS_MANUAL = {
 # Тарифы с ценами в рублях и долларах
 TARIFF_DISPLAY = {
     '1m': ('1 месяц',   '$19',  '1 349 ₽', 19.0,  1349),
-    '3m': ('3 месяца',  '$48',  '3 399 ₽', 48.0,  3399),
-    '6m': ('6 месяцев', '$69',  '4 899 ₽', 69.0,  4899),
+    '3m': ('3 месяца',  '$49',  '3 499 ₽', 49.0,  3499),
+    '6m': ('6 месяцев', '$89',  '6 299 ₽', 89.0,  6299),
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -437,16 +437,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Ручная оплата — показываем рублёвые цены
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton('1 месяц — 1 349 ₽',                                  callback_data=f'tariff:{method}:1m')],
-                [InlineKeyboardButton('3 месяца — 3 399 ₽ (1 133 ₽/мес)',                   callback_data=f'tariff:{method}:3m')],
-                [InlineKeyboardButton('6 месяцев — 4 899 ₽ (817 ₽/мес)',                    callback_data=f'tariff:{method}:6m')],
+                [InlineKeyboardButton('3 месяца — 3 499 ₽ (1 166 ₽/мес)',                   callback_data=f'tariff:{method}:3m')],
+                [InlineKeyboardButton('6 месяцев — 6 299 ₽ (1 050 ₽/мес)',                  callback_data=f'tariff:{method}:6m')],
                 [InlineKeyboardButton('↩️ Назад',                                            callback_data='intent:pay')],
             ])
         else:
             # Авто (крипта и Lava) — долларовые цены
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton('1 месяц — $19',                                       callback_data=f'tariff:{method}:1m')],
-                [InlineKeyboardButton('3 месяца — $48 ($16/мес)',                            callback_data=f'tariff:{method}:3m')],
-                [InlineKeyboardButton('6 месяцев — $69 ($11.5/мес)',                         callback_data=f'tariff:{method}:6m')],
+                [InlineKeyboardButton('3 месяца — $49 ($16.3/мес)',                          callback_data=f'tariff:{method}:3m')],
+                [InlineKeyboardButton('6 месяцев — $89 ($14.8/мес)',                         callback_data=f'tariff:{method}:6m')],
                 [InlineKeyboardButton('↩️ Назад',                                            callback_data='intent:pay')],
             ])
 
