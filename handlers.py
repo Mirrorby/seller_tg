@@ -18,11 +18,11 @@ from payment_manager import (
 
 logger = logging.getLogger(__name__)
 
-# Тарифы с ценами в рублях и долларах
+# Тарифы с ценами в долларах
 TARIFF_DISPLAY = {
-    '1m': ('1 месяц',   '$19',  '1 349 ₽', 19.0,  1349),
-    '3m': ('3 месяца',  '$49',  '3 499 ₽', 49.0,  3499),
-    '6m': ('6 месяцев', '$89',  '6 299 ₽', 89.0,  6299),
+    '1m': ('1 месяц',   '$19'),
+    '3m': ('3 месяца',  '$49'),
+    '6m': ('6 месяцев', '$89'),
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -419,8 +419,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton('1 месяц — $19',             callback_data=f'tariff:{method}:1m')],
-            [InlineKeyboardButton('3 месяца — $49',            callback_data=f'tariff:{method}:3m')],
-            [InlineKeyboardButton('6 месяцев — $89',           callback_data=f'tariff:{method}:6m')],
+            [InlineKeyboardButton('3 месяца — $49 (-14%)',            callback_data=f'tariff:{method}:3m')],
+            [InlineKeyboardButton('6 месяцев — $89 (-20%)',           callback_data=f'tariff:{method}:6m')],
             [InlineKeyboardButton('↩️ Назад',                   callback_data='intent:pay')],
         ])
 
