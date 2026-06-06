@@ -445,7 +445,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # ── Создаём инвойс ────────────────────────────────────────────────────
-                await query.edit_message_text('⏳ Создаю ссылку на оплату...')
+        await query.edit_message_text('⏳ Создаю ссылку на оплату...')
 
         try:
             if method == 'crypto':
