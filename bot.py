@@ -14,7 +14,7 @@ from telegram.error import NetworkError, TimedOut
 from config import Config
 from handlers import (
     handle_message, handle_business_message, handle_start,
-    handle_callback, handle_photo, handle_broadcast,
+    handle_callback, handle_broadcast,
 )
 from scheduler import start_scheduler
 from webhook_server import set_bot_context, start_webhook_server
@@ -88,7 +88,6 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.BUSINESS_MESSAGE,
         handle_message,
