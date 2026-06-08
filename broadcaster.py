@@ -5,7 +5,7 @@ Telethon-аккаунт отдельный от бота. Консерватив
 import asyncio
 import random
 import logging
-import re
+
 from datetime import datetime
 
 from telethon import TelegramClient
@@ -21,19 +21,14 @@ from sheets_client import sheets
 
 log = logging.getLogger(__name__)
 
-DELAY_MIN = 120          # минимальная пауза между группами (секунды)
-DELAY_MAX = 180          # максимальная пауза
-FLOOD_SKIP_THRESHOLD = 180  # FloodWait дольше этого — пропускаем группу
+DELAY_MIN = 120
+DELAY_MAX = 180
+FLOOD_SKIP_THRESHOLD = 180
 
-# Защита от двойного запуска
 _broadcast_running = False
 
 
 async def run_broadcast(progress_callback=None):
-    """
-    Точка входа. Вызывается из handlers.py по команде /broadcast.
-    progress_callback(text) — отправляет сообщение владельцу в бот.
-    """
     global _broadcast_running
 
     if _broadcast_running:
@@ -61,7 +56,6 @@ async def run_broadcast(progress_callback=None):
 
 
 async def _do_broadcast(progress_callback):
-    # Загружаем данные из таблицы
     try:
         groups, templates, groups_ws = sheets.get_broadcast_data()
     except Exception as e:
@@ -108,9 +102,8 @@ async def _do_broadcast(progress_callback):
                 continue
 
             try:
-                success, status, post_link = await _send_one(client, group, text)
+                success, status = await _send_one(client, group, text)
             except PeerFloodError:
-                # PeerFlood = Telegram считает аккаунт спамером, немедленно стоп
                 msg = (
                     "🚫 PeerFloodError — Telegram заблокировал отправку.\n"
                     f"Отправлено до остановки: {sent}/{total}\n"
@@ -122,23 +115,20 @@ async def _do_broadcast(progress_callback):
                 _update_row(groups_ws, group, "PeerFlood — остановлено")
                 return
 
-            _update_row(groups_ws, group, status, post_link if success else "")
+            _update_row(groups_ws, group, status)
 
             if success:
                 sent += 1
             else:
                 failed += 1
 
-            # Отчёт каждые 5 групп или при ошибке
             if progress_callback and (i % 5 == 0 or not success):
                 icon = "✅" if success else "❌"
                 await progress_callback(
                     f"{icon} [{i}/{total}] {group['username']}\n"
                     f"→ {status}"
-                    + (f"\n🔗 {post_link}" if post_link else "")
                 )
 
-            # Пауза перед следующей группой (кроме последней)
             if i < total:
                 delay = random.randint(DELAY_MIN, DELAY_MAX)
                 log.info(f"[broadcaster] Пауза {delay}с ({i}/{total} отправлено)")
@@ -160,12 +150,11 @@ def _pick_template(group: dict, templates: dict) -> str | None:
     return None
 
 
-async def _send_one(client, group: dict, text: str) -> tuple[bool, str, str]:
+async def _send_one(client, group: dict, text: str) -> tuple[bool, str]:
     target = group["username"]
 
     for attempt in range(2):
         try:
-            # Приватная группа по invite-ссылке
             if "t.me/+" in target:
                 hash_ = target.split("+")[-1]
                 try:
@@ -174,78 +163,47 @@ async def _send_one(client, group: dict, text: str) -> tuple[bool, str, str]:
                     pass
 
             entity = await client.get_entity(target)
-            msg = await client.send_message(entity, text)
+            await client.send_message(entity, text)
 
-            # Формируем ссылку на пост
-            post_link = ""
-            chat_username = getattr(entity, "username", None)
-            if chat_username and msg.id:
-                post_link = f"https://t.me/{chat_username}/{msg.id}"
-
-            log.info(f"[broadcaster] ✅ {target}" + (f" → {post_link}" if post_link else ""))
-            return True, "Отправлено", post_link
+            log.info(f"[broadcaster] ✅ {target}")
+            return True, "Отправлено"
 
         except FloodWaitError as e:
             if e.seconds > FLOOD_SKIP_THRESHOLD:
                 log.warning(f"[broadcaster] FloodWait {e.seconds}с на {target} — пропуск")
-                return False, f"FloodWait {e.seconds}с — пропущено", ""
+                return False, f"FloodWait {e.seconds}с — пропущено"
             log.warning(f"[broadcaster] FloodWait {e.seconds}с на {target} — ждём...")
             await asyncio.sleep(e.seconds + 5)
-            continue  # повтор после ожидания
+            continue
 
         except PeerFloodError:
-            raise  # пробрасываем наверх — остановить всю рассылку
+            raise
 
         except SlowModeWaitError as e:
-            log.warning(f"[broadcaster] SlowMode {e.seconds}с на {target}")
-            return False, f"SlowMode {e.seconds}с", ""
+            return False, f"SlowMode {e.seconds}с"
 
         except ChatWriteForbiddenError:
-            log.warning(f"[broadcaster] Нет прав на запись: {target}")
-            return False, "Нет прав на запись", ""
+            return False, "Нет прав на запись"
 
         except UserBannedInChannelError:
-            log.warning(f"[broadcaster] Аккаунт забанен в: {target}")
-            return False, "Аккаунт забанен", ""
+            return False, "Аккаунт забанен"
 
         except ChannelPrivateError:
-            log.warning(f"[broadcaster] Приватный канал: {target}")
-            return False, "Приватный канал", ""
+            return False, "Приватный канал"
 
         except Exception as e:
             log.error(f"[broadcaster] Ошибка для {target}: {e}")
-            return False, f"Ошибка: {str(e)[:80]}", ""
+            return False, f"Ошибка: {str(e)[:80]}"
 
-    return False, "FloodWait — не удалось после повтора", ""
+    return False, "FloodWait — не удалось после повтора"
 
 
-def _update_row(ws, group: dict, status: str, new_post_link: str = ""):
-    """Обновляет строку в листе «Группы» после отправки."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    post_link = group["post_link"]
-    post_new = group["post_new"]
-    posts_between = group["posts_between"]
-
-    if new_post_link:
-        if not post_link:
-            post_link = new_post_link
-            post_new = ""
-            posts_between = ""
-        elif not post_new:
-            post_new = new_post_link
-            posts_between = _calc_posts_between(post_link, post_new)
-        else:
-            post_link = post_new
-            post_new = new_post_link
-            posts_between = _calc_posts_between(post_link, post_new)
-
+def _update_row(ws, group: dict, status: str):
+    """Обновляет только статус и время последней публикации."""
     row = group["row"]
-    updates = [
-        (row, 5, status),         # E — Статус
-        (row, 6, post_link),      # F — Ссылка на пост
-        (row, 7, post_new),       # G — Ссылка на новый пост
-        (row, 8, posts_between),  # H — Постов между
-    ]
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    updates = [(row, 5, status)]   # E — Статус
     if status == "Отправлено":
         updates.append((row, 3, now))  # C — Время последней публикации
 
@@ -254,18 +212,3 @@ def _update_row(ws, group: dict, status: str, new_post_link: str = ""):
             ws.update_cell(r, c, v)
         except Exception as e:
             log.error(f"[broadcaster] Ошибка записи в таблицу row={r} col={c}: {e}")
-
-
-def _calc_posts_between(old_url: str, new_url: str) -> str:
-    old_id = _extract_post_id(old_url)
-    new_id = _extract_post_id(new_url)
-    if old_id is not None and new_id is not None:
-        return str(abs(new_id - old_id))
-    return ""
-
-
-def _extract_post_id(url: str) -> int | None:
-    if not url:
-        return None
-    m = re.search(r"/(\d+)\s*$", url.strip())
-    return int(m.group(1)) if m else None
