@@ -39,11 +39,7 @@ def set_bot_context(ctx):
 async def lava_webhook_handler(request: web.Request) -> web.Response:
     """POST /lava-webhook"""
     body_bytes = await request.read()
-    signature = request.headers.get("signature", "")
-
-    # ВРЕМЕННО — убрать после диагностики
-    logger.info(f"Lava headers: {dict(request.headers)}")
-    logger.info(f"Lava body: {body_bytes[:300]}")
+    signature = request.headers.get("X-Api-Key", "")
 
     # Верификация подписи
     if not lava.verify_webhook(body_bytes, signature):
