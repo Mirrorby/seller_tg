@@ -41,6 +41,10 @@ async def lava_webhook_handler(request: web.Request) -> web.Response:
     body_bytes = await request.read()
     signature = request.headers.get("signature", "")
 
+    # ВРЕМЕННО — убрать после диагностики
+    logger.info(f"Lava headers: {dict(request.headers)}")
+    logger.info(f"Lava body: {body_bytes[:300]}")
+
     # Верификация подписи
     if not lava.verify_webhook(body_bytes, signature):
         logger.warning("Lava webhook: invalid signature")
