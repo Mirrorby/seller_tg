@@ -201,9 +201,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
         sheets.history_append_message(user_id, "🤖", reply)
         _update_crm_stage(user_id, username, reply, trial_link_sent)
+        
         if needs_takeover:
             logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
             await _notify_owner_takeover(context, username, combined, reply)
+        
+        if trial_link_sent:
+            logger.info(f"🔔 {username} получил ссылку на триал — уведомляем владельца")
+            await _notify_owner(context, username, user_id, '🎯 Получил ссылку на @lead_vitrina_bot — триал начат')
 
     _debounce_tasks[user_id] = asyncio.create_task(_flush_direct())
 
@@ -296,9 +301,14 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
         logger.info(f"✅ Ответ отправлен {username}: {reply[:80]}")
         sheets.history_append_message(user_id, "🤖", reply)
         _update_crm_stage(user_id, username, reply, trial_link_sent)
+
         if needs_takeover:
             logger.info(f"🔔 {username} спрашивает цену — отправляем уведомление владельцу")
             await _notify_owner_takeover(context, username, combined, reply)
+        
+        if trial_link_sent:
+            logger.info(f"🔔 {username} получил ссылку на триал — уведомляем владельца")
+            await _notify_owner(context, username, user_id, '🎯 Получил ссылку на @lead_vitrina_bot — триал начат')
 
     _debounce_tasks[user_id] = asyncio.create_task(_flush_business())
 
