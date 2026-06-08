@@ -94,15 +94,11 @@ class LavaClient:
     # ------------------------------------------------------------------ #
 
     def verify_webhook(self, body_bytes: bytes, signature: str) -> bool:
+        """Lava шлёт X-Api-Key вместо HMAC-подписи."""
         if not self.webhook_secret:
             logger.warning("LAVA_WEBHOOK_SECRET не задан — пропускаем верификацию")
             return True
-        expected = hmac.new(
-            self.webhook_secret.encode(),
-            body_bytes,
-            hashlib.sha256,
-        ).hexdigest()
-        return hmac.compare_digest(expected, signature)
+        return hmac.compare_digest(signature, self.webhook_secret)
 
     # ------------------------------------------------------------------ #
     # Разбор webhook-события                                               #
