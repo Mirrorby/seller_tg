@@ -8,6 +8,11 @@ class Config:
     # Telegram
     BOT_TOKEN: str = os.environ["BOT_TOKEN"]
     OWNER_CHAT_ID: int = int(os.environ["OWNER_CHAT_ID"])
+    
+    # Telethon (broadcaster)
+    TG_SESSION_STRING: str = os.getenv("TG_SESSION_STRING", "")
+    TG_API_ID: int = int(os.getenv("TG_API_ID", "0"))
+    TG_API_HASH: str = os.getenv("TG_API_HASH", "")
 
     # Gemini
     GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
