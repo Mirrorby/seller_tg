@@ -50,6 +50,7 @@ logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING)
 logging.getLogger("google.auth").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
+logging.getLogger("telethon.client.updates").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
