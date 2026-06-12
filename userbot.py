@@ -262,7 +262,25 @@ def register_cold_reply_handler(client: TelegramClient):
             logger.info(f"Trial started (холодный): {username}")
 
 
-async def main():
+_userbot_client: TelegramClient | None = None
+
+
+async def start_userbot() -> TelegramClient:
+    """
+    Запускает Telethon userbot внутри уже работающего event loop основного бота.
+    Используется из post_init в main.py:
+
+        from userbot import start_userbot
+        asyncio.create_task(start_userbot())
+
+    Возвращает TelegramClient (на случай если нужно потом отключить).
+    """
+    global _userbot_client
+
+    if not Config.TG_SESSION_STRING or not Config.TG_API_ID or not Config.TG_API_HASH:
+        logger.warning("Userbot не запущен: TG_API_ID/TG_API_HASH/TG_SESSION_STRING не заданы")
+        return None
+
     session = StringSession(Config.TG_SESSION_STRING)
     client = TelegramClient(
         session,
@@ -276,12 +294,27 @@ async def main():
 
     register_cold_reply_handler(client)
 
-    # Запускаем цикл рассылки параллельно с обработкой входящих
-    await asyncio.gather(
-        outreach_loop(client),
-        client.run_until_disconnected(),
-    )
+    # outreach_loop крутится бесконечно сам по себе — фоновая задача
+    asyncio.create_task(outreach_loop(client))
+
+    _userbot_client = client
+    return client
+
+
+async def stop_userbot():
+    """Корректно отключить Telethon client. Вызывается из post_shutdown."""
+    global _userbot_client
+    if _userbot_client:
+        await _userbot_client.disconnect()
+        logger.info("🛑 Userbot отключён")
+        _userbot_client = None
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Standalone-запуск для локального теста (без основного бота)
+    async def _standalone():
+        client = await start_userbot()
+        if client:
+            await client.run_until_disconnected()
+
+    asyncio.run(_standalone())
