@@ -30,10 +30,9 @@ from config import Config
 from cold_gemini import cold_gemini
 from sheets_client import sheets
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [USERBOT] %(levelname)s %(message)s",
-)
+# Логирование настраивается в main.py (root logger). Если этот файл
+# запускается отдельно (стандартный if __name__ == "__main__" внизу),
+# basicConfig применится только в этом случае — см. конец файла.
 logger = logging.getLogger(__name__)
 
 # ── Константы темпа ────────────────────────────────────────────────
@@ -311,7 +310,13 @@ async def stop_userbot():
 
 
 if __name__ == "__main__":
-    # Standalone-запуск для локального теста (без основного бота)
+    # Standalone-запуск для локального теста (без основного бота) —
+    # настраиваем logging только в этом случае
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [USERBOT] %(levelname)s %(message)s",
+    )
+
     async def _standalone():
         client = await start_userbot()
         if client:
