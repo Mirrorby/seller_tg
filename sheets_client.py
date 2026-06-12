@@ -78,7 +78,6 @@ COLD_STATUS_SKIPPED  = "Пропущен"
 COLD_STATUS_FAILED   = "Ошибка"
 COLD_STATUS_TRIAL    = "Триал"
 
-
 class SheetsClient:
 
     def __init__(self):
@@ -553,13 +552,54 @@ class SheetsClient:
         except Exception:
             return None
 
+    def _get_crm_lookup_sets(self) -> tuple[set, set]:
+        """
+        Читает CRM один раз и возвращает (set chat_id'ов, set username'ов)
+        для быстрой проверки is_in_crm без отдельного API-запроса на каждую строку.
+        """
+        try:
+            all_rows = self.crm.get_all_values()
+            chat_ids = set()
+            usernames = set()
+            for row in all_rows[CRM_DATA_START_ROW - 1:]:
+                if len(row) >= COL["chat_id"]:
+                    val = row[COL["chat_id"] - 1].strip()
+                    if val:
+                        chat_ids.add(val)
+                if len(row) >= COL["username"]:
+                    val = row[COL["username"] - 1].strip()
+                    if val:
+                        usernames.add(val)
+            return chat_ids, usernames
+        except Exception as e:
+            logger.error(f"_get_crm_lookup_sets error: {e}")
+            return set(), set()
+
+    def is_in_crm(self, user_id, username: str = "") -> bool:
+        """
+        Проверяет, есть ли уже запись в CRM по chat_id или username.
+        Используется чтобы не писать холодные сообщения тем, кто уже
+        является тёплым/известным контактом.
+        """
+        try:
+            row = self._crm_find_row(username=username, chat_id=str(user_id))
+            return row is not None
+        except Exception as e:
+            logger.error(f"is_in_crm error (user_id={user_id}): {e}")
+            return False
+
     def get_next_cold_contact(self) -> Optional[dict]:
         """
         Возвращает следующий необработанный контакт из листа "Риэлторы"
         (колонка E «Статус» пустая), либо None если таких нет.
+
+        Контакты, уже присутствующие в CRM (по chat_id или username),
+        пропускаются и помечаются как "Пропущен" — не пишем холодное
+        тем, кто уже тёплый/известный.
         """
         try:
             rows = self.leads.get_all_values()
+            crm_chat_ids, crm_usernames = self._get_crm_lookup_sets()
 
             for i, row in enumerate(rows[COLD_DATA_START_ROW - 1:], start=COLD_DATA_START_ROW):
                 if len(row) < COLD_COL_USER_ID or not row[COLD_COL_USER_ID - 1].strip():
@@ -569,12 +609,20 @@ class SheetsClient:
                 if status:
                     continue  # уже обработан
 
+                user_id  = row[COLD_COL_USER_ID - 1].strip()
+                username = row[COLD_COL_USERNAME - 1].strip() if len(row) >= COLD_COL_USERNAME else ""
+
+                # Если контакт уже есть в CRM (тёплый/известный) — не пишем холодное
+                if user_id in crm_chat_ids or (username and username in crm_usernames):
+                    self.mark_cold_skipped(user_id, "already_in_crm")
+                    continue
+
                 return {
                     "row":      i,
-                    "user_id":  row[COLD_COL_USER_ID - 1].strip(),
+                    "user_id":  user_id,
                     "name":     row[COLD_COL_NAME - 1].strip() if len(row) >= COLD_COL_NAME else "",
                     "comment":  row[COLD_COL_COMMENT - 1].strip() if len(row) >= COLD_COL_COMMENT else "",
-                    "username": row[COLD_COL_USERNAME - 1].strip() if len(row) >= COLD_COL_USERNAME else "",
+                    "username": username,
                 }
 
             return None
