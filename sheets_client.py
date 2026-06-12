@@ -56,6 +56,28 @@ STATUS_TRIAL        = "🔵 Триал"
 STATUS_DISCONNECTED = "🔴 Отключён"
 STATUS_REFUSED      = "🚫 Отказ"
 
+# ------------------------------------------------------------------ #
+# Лист "Риэлторы" — очередь холодных контактов                        #
+# Колонки: A=user_id B=Имя C=Комментарий D=username                   #
+#          E=Статус  F=Дата отправки     G=Результат                  #
+# ------------------------------------------------------------------ #
+COLD_COL_USER_ID  = 1  # A
+COLD_COL_NAME     = 2  # B
+COLD_COL_COMMENT  = 3  # C
+COLD_COL_USERNAME = 4  # D
+COLD_COL_STATUS   = 5  # E
+COLD_COL_SENT_AT  = 6  # F
+COLD_COL_RESULT   = 7  # G
+
+COLD_DATA_START_ROW = 2
+
+# Статусы холодных контактов (колонка E листа "Риэлторы")
+COLD_STATUS_SENT     = "Отправлено"
+COLD_STATUS_DIALOG   = "В диалоге"
+COLD_STATUS_SKIPPED  = "Пропущен"
+COLD_STATUS_FAILED   = "Ошибка"
+COLD_STATUS_TRIAL    = "Триал"
+
 
 class SheetsClient:
 
@@ -66,6 +88,7 @@ class SheetsClient:
         self.sheet_id    = Config.GOOGLE_SHEET_ID
         self._crm_sheet  = None
         self._hist_sheet = None
+        self._leads_sheet = None
 
     # ------------------------------------------------------------------ #
     # Листы                                                                #
@@ -91,6 +114,14 @@ class SheetsClient:
                 self._hist_sheet.update("A1:B1", [["Username", "Chat ID"]])
                 logger.info(f"Создан лист истории диалогов: «{Config.HISTORY_SHEET_NAME}»")
         return self._hist_sheet
+
+    @property
+    def leads(self) -> gspread.Worksheet:
+        """Лист 'Риэлторы' — очередь холодных контактов."""
+        if self._leads_sheet is None:
+            wb = self.gc.open_by_key(self.sheet_id)
+            self._leads_sheet = wb.worksheet(Config.COLD_LEADS_SHEET_NAME)
+        return self._leads_sheet
 
     # ------------------------------------------------------------------ #
     # CRM: поиск строки                                                    #
@@ -509,5 +540,158 @@ class SheetsClient:
         except Exception as e:
             logger.error(f"Не удалось прочитать токен рассылки из Настроек: {e}")
             return ""
+
+    # ------------------------------------------------------------------ #
+    # Холодные контакты: очередь в листе "Риэлторы"                       #
+    # ------------------------------------------------------------------ #
+
+    def _leads_find_row(self, user_id) -> Optional[int]:
+        """Найти строку в листе 'Риэлторы' по user_id (колонка A)."""
+        try:
+            cell = self.leads.find(str(user_id), in_column=COLD_COL_USER_ID)
+            return cell.row
+        except Exception:
+            return None
+
+    def get_next_cold_contact(self) -> Optional[dict]:
+        """
+        Возвращает следующий необработанный контакт из листа "Риэлторы"
+        (колонка E «Статус» пустая), либо None если таких нет.
+        """
+        try:
+            rows = self.leads.get_all_values()
+
+            for i, row in enumerate(rows[COLD_DATA_START_ROW - 1:], start=COLD_DATA_START_ROW):
+                if len(row) < COLD_COL_USER_ID or not row[COLD_COL_USER_ID - 1].strip():
+                    continue
+
+                status = row[COLD_COL_STATUS - 1].strip() if len(row) >= COLD_COL_STATUS else ""
+                if status:
+                    continue  # уже обработан
+
+                return {
+                    "row":      i,
+                    "user_id":  row[COLD_COL_USER_ID - 1].strip(),
+                    "name":     row[COLD_COL_NAME - 1].strip() if len(row) >= COLD_COL_NAME else "",
+                    "comment":  row[COLD_COL_COMMENT - 1].strip() if len(row) >= COLD_COL_COMMENT else "",
+                    "username": row[COLD_COL_USERNAME - 1].strip() if len(row) >= COLD_COL_USERNAME else "",
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"get_next_cold_contact error: {e}")
+            return None
+
+    def get_cold_contact_status(self, user_id) -> Optional[str]:
+        """
+        Возвращает значение колонки 'Статус' (E) для user_id из листа "Риэлторы".
+        None — если такого user_id в листе нет вообще (не наш холодный контакт).
+        "" — есть в листе, но статус пуст (новый, необработанный).
+        """
+        try:
+            row = self._leads_find_row(user_id)
+            if row is None:
+                return None
+            val = self.leads.cell(row, COLD_COL_STATUS).value
+            return (val or "").strip()
+        except Exception as e:
+            logger.error(f"get_cold_contact_status error: {e}")
+            return None
+
+    def mark_cold_sent(self, user_id, message: str):
+        """Отметить: первое холодное сообщение отправлено."""
+        try:
+            row = self._leads_find_row(user_id)
+            if row is None:
+                logger.warning(f"mark_cold_sent: user_id={user_id} не найден в листе Риэлторы")
+                return
+
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+            cells = [
+                gspread.Cell(row, COLD_COL_STATUS, COLD_STATUS_SENT),
+                gspread.Cell(row, COLD_COL_SENT_AT, ts),
+                gspread.Cell(row, COLD_COL_RESULT, message[:300]),
+            ]
+            self.leads.update_cells(cells, value_input_option="USER_ENTERED")
+            logger.info(f"📤 Холодное: отправлено user_id={user_id}")
+
+        except Exception as e:
+            logger.error(f"mark_cold_sent error (user_id={user_id}): {e}")
+
+    def mark_cold_failed(self, user_id, reason: str):
+        """Отметить: ошибка отправки (приватность/деактивирован/etc)."""
+        try:
+            row = self._leads_find_row(user_id)
+            if row is None:
+                return
+            cells = [
+                gspread.Cell(row, COLD_COL_STATUS, COLD_STATUS_FAILED),
+                gspread.Cell(row, COLD_COL_RESULT, reason[:300]),
+            ]
+            self.leads.update_cells(cells, value_input_option="USER_ENTERED")
+            logger.info(f"⚠️ Холодное: ошибка user_id={user_id} — {reason}")
+
+        except Exception as e:
+            logger.error(f"mark_cold_failed error (user_id={user_id}): {e}")
+
+    def mark_cold_skipped(self, user_id, reason: str):
+        """Отметить: пропущен (например, уже был диалог с этим контактом)."""
+        try:
+            row = self._leads_find_row(user_id)
+            if row is None:
+                return
+            cells = [
+                gspread.Cell(row, COLD_COL_STATUS, COLD_STATUS_SKIPPED),
+                gspread.Cell(row, COLD_COL_RESULT, reason[:300]),
+            ]
+            self.leads.update_cells(cells, value_input_option="USER_ENTERED")
+            logger.info(f"⏭️ Холодное: пропущен user_id={user_id} — {reason}")
+
+        except Exception as e:
+            logger.error(f"mark_cold_skipped error (user_id={user_id}): {e}")
+
+    def promote_cold_to_dialog(self, user_id, username: str, name: str = ""):
+        """
+        Вызывается когда холодный контакт ОТВЕТИЛ.
+        1. Статус в листе "Риэлторы" -> "В диалоге"
+        2. Создаётся/обновляется строка в CRM (upsert_client)
+        3. Заводится строка в "Истории диалогов" для дальнейших history_* вызовов
+        """
+        try:
+            row = self._leads_find_row(user_id)
+            if row:
+                self.leads.update_cell(row, COLD_COL_STATUS, COLD_STATUS_DIALOG)
+
+            uname = username or str(user_id)
+
+            self.upsert_client(
+                uname,
+                chat_id=str(user_id),
+                name=name,
+                dialog="Да",
+                status=STATUS_LEAD,
+                comment="Холодный контакт — ответил, диалог начат",
+            )
+
+            self.history_ensure_client(uname, int(user_id))
+            logger.info(f"🟡 Холодный → Лид: {uname} (user_id={user_id})")
+
+        except Exception as e:
+            logger.error(f"promote_cold_to_dialog error (user_id={user_id}): {e}")
+
+    def mark_cold_trial(self, user_id, username: str = ""):
+        """Отметить: контакту отправлена ссылка на @lead_vitrina_bot (триал)."""
+        try:
+            row = self._leads_find_row(user_id)
+            if row:
+                self.leads.update_cell(row, COLD_COL_STATUS, COLD_STATUS_TRIAL)
+
+            if username:
+                self.mark_trial_started(username)
+
+        except Exception as e:
+            logger.error(f"mark_cold_trial error (user_id={user_id}): {e}")
+
 
 sheets = SheetsClient()
