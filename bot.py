@@ -1,6 +1,6 @@
 import asyncio
 import logging
-
+import sys
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -10,7 +10,6 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import NetworkError, TimedOut
-
 from config import Config
 from handlers import (
     handle_message, handle_business_message, handle_start,
@@ -20,11 +19,29 @@ from scheduler import start_scheduler
 from webhook_server import set_bot_context, start_webhook_server
 from userbot import start_userbot, stop_userbot
 
-logging.basicConfig(
-    format="%(asctime)s  %(levelname)s  [%(name)s]  %(message)s",
+# ------------------------------------------------------------------ #
+# Логирование: INFO -> stdout, WARNING/ERROR -> stderr               #
+# (чтобы Railway помечал красным только реальные ошибки)             #
+# ------------------------------------------------------------------ #
+_formatter = logging.Formatter(
+    "%(asctime)s  %(levelname)s  [%(name)s]  %(message)s",
     datefmt="%H:%M:%S",
-    level=logging.INFO,
 )
+
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setLevel(logging.DEBUG)
+_stdout_handler.addFilter(lambda record: record.levelno < logging.WARNING)
+_stdout_handler.setFormatter(_formatter)
+
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setLevel(logging.WARNING)
+_stderr_handler.setFormatter(_formatter)
+
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.INFO)
+_root_logger.addHandler(_stdout_handler)
+_root_logger.addHandler(_stderr_handler)
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -33,7 +50,6 @@ logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING)
 logging.getLogger("google.auth").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
-
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +69,7 @@ async def post_init(application: Application) -> None:
     class _Ctx:
         def __init__(self, bot):
             self.bot = bot
+
     set_bot_context(_Ctx(application.bot))
 
 
@@ -91,7 +108,6 @@ def main() -> None:
         .connect_timeout(30)
         .build()
     )
-
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(
@@ -104,7 +120,6 @@ def main() -> None:
     ))
     app.add_handler(CommandHandler("broadcast", handle_broadcast))
     app.add_error_handler(error_handler)
-
     logger.info("🤖 Бот запущен")
     app.run_polling(
         drop_pending_updates=True,
