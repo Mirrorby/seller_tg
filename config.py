@@ -27,6 +27,7 @@ class Config:
 
     # Sheet names
     CRM_SHEET_NAME: str = "CRM"
+    COLD_LEADS_SHEET_NAME: str = "Риэлторы"
     HISTORY_SHEET_NAME: str = "💬 История диалогов"
 
     # CRM row config

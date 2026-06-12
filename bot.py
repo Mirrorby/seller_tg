@@ -18,6 +18,7 @@ from handlers import (
 )
 from scheduler import start_scheduler
 from webhook_server import set_bot_context, start_webhook_server
+from userbot import start_userbot, stop_userbot
 
 logging.basicConfig(
     format="%(asctime)s  %(levelname)s  [%(name)s]  %(message)s",
@@ -41,6 +42,9 @@ async def post_init(application: Application) -> None:
     start_scheduler(application)
     logger.info("Scheduler запущен")
 
+    # Userbot для холодных контактов (Telethon, тот же event loop)
+    asyncio.create_task(start_userbot())
+
     # Webhook сервер для Lava
     runner = await start_webhook_server()
     application.bot_data["webhook_runner"] = runner
@@ -57,6 +61,8 @@ async def post_shutdown(application: Application) -> None:
     if runner:
         await runner.cleanup()
         logger.info("Webhook server остановлен")
+
+    await stop_userbot()
 
     # Закрыть aiohttp-сессии платёжных клиентов
     try:
