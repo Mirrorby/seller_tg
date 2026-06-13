@@ -38,7 +38,11 @@ from sheets_client import sheets
 logger = logging.getLogger(__name__)
 
 # ── Константы темпа ────────────────────────────────────────────────
-DAILY_LIMIT = 15          # сообщений в день максимум
+# DAILY_LIMIT можно менять через переменную окружения COLD_DAILY_LIMIT
+# в Railway без редеплоя кода. Поставь 0, чтобы временно полностью
+# остановить холодную рассылку (входящие диалоги продолжат отвечать).
+import os
+DAILY_LIMIT = int(os.getenv("COLD_DAILY_LIMIT", "15"))
 INTERVAL_MIN = 25 * 60   # минимальный интервал между отправками (сек)
 INTERVAL_MAX = 40 * 60   # максимальный интервал
 CHECK_INTERVAL = 5 * 60  # как часто проверять очередь (сек)
