@@ -25,6 +25,8 @@ from telethon.errors import (
     UserPrivacyRestrictedError,
     InputUserDeactivatedError,
     PeerIdInvalidError,
+    UsernameNotOccupiedError,
+    UsernameInvalidError,
 )
 from config import Config
 from cold_gemini import cold_gemini
@@ -84,19 +86,51 @@ def _reset_daily_counter_if_needed():
         _last_reset_day = today
 
 
-async def _has_existing_dialog(client: TelegramClient, user_id: int) -> bool:
+async def _resolve_entity(client: TelegramClient, user_id, username: str):
+    """
+    Резолвит entity для отправки сообщения.
+
+    Telethon не может построить InputPeerUser из чистого user_id без
+    access_hash (ошибка "Could not find the input entity for PeerUser(...)"),
+    если этот пользователь ещё не "известен" сессии (нет в диалогах/контактах).
+
+    Поэтому резолвим по username через ResolveUsername — это работает для
+    любого юзера с открытым публичным username, независимо от истории
+    переписки. Если username нет или не резолвится — пробуем user_id как
+    запасной вариант (на случай если юзер всё же уже в кэше сессии).
+
+    Возвращает entity или None, если ничего не сработало.
+    """
+    if username:
+        uname = username.lstrip("@")
+        try:
+            return await client.get_entity(uname)
+        except (UsernameNotOccupiedError, UsernameInvalidError):
+            logger.warning(f"Username не существует/невалиден: @{uname}")
+        except Exception as e:
+            logger.warning(f"Не удалось резолвить @{uname}: {e}")
+
+    # Фоллбэк на user_id (сработает только если юзер уже в кэше сессии)
+    try:
+        return await client.get_entity(user_id)
+    except Exception as e:
+        logger.warning(f"Не удалось резолвить user_id={user_id}: {e}")
+        return None
+
+
+async def _has_existing_dialog(client: TelegramClient, entity) -> bool:
     """
     Проверка, есть ли уже переписка с этим пользователем
     (любой из аккаунтов уже писал друг другу — пропускаем как холодного).
     """
     try:
-        async for _ in client.iter_messages(user_id, limit=1):
+        async for _ in client.iter_messages(entity, limit=1):
             return True
         return False
     except Exception as e:
-        logger.warning(f"Не удалось проверить историю с {user_id}: {e}")
-        # Если не получили доступ к диалогу (например, юзер ещё не существует
-        # для нас как Peer) — считаем что диалога нет, пробуем писать.
+        logger.warning(f"Не удалось проверить историю с {entity}: {e}")
+        # Если не получили доступ к диалогу — считаем что диалога нет,
+        # пробуем писать.
         return False
 
 
@@ -109,8 +143,16 @@ async def send_cold_outreach(client: TelegramClient, user_id: int, username: str
         logger.info("Дневной лимит достигнут, ждём завтра")
         return False
 
+    # Резолвим entity по username (или user_id как фоллбэк) — без этого
+    # Telethon не может построить InputPeerUser для незнакомых юзеров
+    entity = await _resolve_entity(client, user_id, username)
+    if entity is None:
+        logger.warning(f"Не удалось резолвить контакт: {username or user_id}")
+        sheets.mark_cold_failed(user_id, "could_not_resolve_entity")
+        return False
+
     # Пропускаем, если с этим контактом уже есть переписка
-    if await _has_existing_dialog(client, user_id):
+    if await _has_existing_dialog(client, entity):
         logger.info(f"Уже есть диалог с {username or user_id} — пропускаем, помечаем как тёплого")
         sheets.mark_cold_skipped(user_id, "already_in_dialog")
         return False
@@ -118,7 +160,7 @@ async def send_cold_outreach(client: TelegramClient, user_id: int, username: str
     first_message = await cold_gemini.generate_cold_opener(username, name)
 
     try:
-        await client.send_message(user_id, first_message)
+        await client.send_message(entity, first_message)
         _sent_today += 1
         logger.info(f"✉️  Холодное отправлено → {username or user_id} [{_sent_today}/{DAILY_LIMIT}]")
 
