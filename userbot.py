@@ -211,11 +211,13 @@ async def outreach_loop(client: TelegramClient):
             if not _is_within_working_hours():
                 wait_sec = _seconds_until_working_hours()
                 now = datetime.now(TBILISI_TZ).strftime("%H:%M")
+                # Минимум 30 сек, иначе на границе окна (wait_sec ~0-1)
+                # цикл крутится почти без задержки и заваливает логи.
+                sleep_sec = max(min(wait_sec, CHECK_INTERVAL), 30)
                 logger.info(
-                    f"⏰ {now} (Тбилиси) — вне рабочего окна, спим {wait_sec // 60} мин"
+                    f"⏰ {now} (Тбилиси) — вне рабочего окна, спим {sleep_sec} сек"
                 )
-                # Спим короткими интервалами, чтобы быстро реагировать на shutdown
-                await asyncio.sleep(min(wait_sec, CHECK_INTERVAL))
+                await asyncio.sleep(sleep_sec)
                 continue
 
             if _sent_today < DAILY_LIMIT:
