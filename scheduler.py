@@ -7,10 +7,32 @@ from apscheduler.triggers.cron import CronTrigger
 from telegram.ext import Application
 
 from sheets_client import sheets
-from gemini_client import gemini
 from config import Config
+from handlers import PAYMENT_REQUISITES_TEXT, TARIFF_LABEL, TARIFF_PRICE
 
 logger = logging.getLogger(__name__)
+
+
+def _trial_closing_message(username: str) -> str:
+    """Жёсткий шаблон — без ИИ. Триал закончился сегодня."""
+    return (
+        f"Привет! Сегодня заканчивается твой бесплатный триал в @lead_vitrina_bot.\n\n"
+        f"Если понравилось — продление на {TARIFF_LABEL}: {TARIFF_PRICE}.\n\n"
+        f"{PAYMENT_REQUISITES_TEXT}\n\n"
+        f"⚠️ Укажи в комментарии к платежу свой Telegram: {username}\n\n"
+        f"После перевода подключу подписку вручную в течение нескольких часов."
+    )
+
+
+def _renewal_closing_message(username: str, days_left: int) -> str:
+    """Жёсткий шаблон — без ИИ. Платная подписка заканчивается через N дней."""
+    return (
+        f"Привет! Подписка на @lead_vitrina_bot заканчивается через {days_left} дня.\n\n"
+        f"Продление на {TARIFF_LABEL}: {TARIFF_PRICE}.\n\n"
+        f"{PAYMENT_REQUISITES_TEXT}\n\n"
+        f"⚠️ Укажи в комментарии к платежу свой Telegram: {username}\n\n"
+        f"После перевода продлю подписку вручную в течение нескольких часов."
+    )
 
 
 def _send_via_broadcast_bot(token: str, chat_id: int, text: str) -> bool:
@@ -38,11 +60,11 @@ async def check_expiring(application: Application):
     Ежедневная проверка истекающих триалов и подписок.
 
     Триал (tariff_days<=3) истекает СЕГОДНЯ:
-      → broadcast-бот пишет клиенту с оффером 19$
+      → broadcast-бот пишет клиенту с оффером 1499₽
       → Уведомление владельцу
 
     Платная подписка (tariff_days>3) истекает через 3 дня:
-      → broadcast-бот пишет клиенту про продление за 24$
+      → broadcast-бот пишет клиенту про продление за 1499₽
       → Уведомление владельцу
     """
     bot = application.bot
@@ -79,7 +101,7 @@ async def check_expiring(application: Application):
         if chat_id_str:
             try:
                 chat_id    = int(chat_id_str)
-                client_msg = await gemini.generate_trial_closing(username)
+                client_msg = _trial_closing_message(username)
                 sent = _send_via_broadcast_bot(broadcast_token, chat_id, client_msg)
                 if sent:
                     sheets.history_append_message(chat_id, "🤖", client_msg)
@@ -101,7 +123,7 @@ async def check_expiring(application: Application):
                     f"👤 {username}\n"
                     f"📅 Дата: {expires_at}\n\n"
                     + (
-                        "✅ Клиенту отправлено сообщение с оффером 19$"
+                        "✅ Клиенту отправлено сообщение с оффером 1499₽"
                         if chat_id_str else
                         "⚠️ chat_id не найден — напишите клиенту вручную"
                     )
@@ -130,7 +152,7 @@ async def check_expiring(application: Application):
         if chat_id_str:
             try:
                 chat_id    = int(chat_id_str)
-                client_msg = await gemini.generate_renewal_closing(username, days_left=3)
+                client_msg = _renewal_closing_message(username, days_left=3)
                 sent = _send_via_broadcast_bot(broadcast_token, chat_id, client_msg)
                 if sent:
                     sheets.history_append_message(chat_id, "🤖", client_msg)
