@@ -13,13 +13,9 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-# Тарифы с ценами в рублях и долларах
-# Тарифы: (label, price_str, amount_usd)
-TARIFF_DISPLAY = {
-    '1m': ('1 месяц',   '$19', 19.0),
-    '3m': ('3 месяца',  '$49', 49.0),
-    '6m': ('6 месяцев', '$89', 89.0),
-}
+# Единственный тариф: 1 месяц
+TARIFF_LABEL = '1 месяц'
+TARIFF_PRICE = '1499 ₽'
 
 # ── Готовый текст с реквизитами для ручной оплаты ──────────────────────────
 PAYMENT_REQUISITES_TEXT = (
@@ -350,33 +346,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _notify_owner(context, username, user_id, '💬 Нажал «Поделиться мнением»')
         return
 
-    # ── Намерение: оплатить ──────────────────────────────────────────────────
+    # ── Намерение: оплатить → сразу цена + реквизиты ────────────────────────
     if data == 'intent:pay':
-        await query.edit_message_text(
-            '📋 <b>Выберите тариф:</b>',
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton('1 месяц — $19',          callback_data='tariff:1m')],
-                [InlineKeyboardButton('3 месяца — $49 (-14%)',  callback_data='tariff:3m')],
-                [InlineKeyboardButton('6 месяцев — $89 (-29%)', callback_data='tariff:6m')],
-                [InlineKeyboardButton('↩️ Главное меню',        callback_data='menu:main')],
-            ]),
-        )
-        await _notify_owner(context, username, user_id, '💳 Нажал «Оплатить подписку»')
-        return
-
-    # ── Выбор тарифа → реквизиты банка для ручной оплаты ────────────────────
-    if data.startswith('tariff:'):
-        tariff_key = data.split(':')[1]
-        tariff_name, price_usd, amount_usd = TARIFF_DISPLAY[tariff_key]
-
-        await _notify_owner(
-            context, username, user_id,
-            f'💰 Выбрал тариф: {tariff_name} ({price_usd}) — отправлены реквизиты'
-        )
-
         result_text = (
-            f'💳 <b>Оплата тарифа «{tariff_name}» — {price_usd}</b>\n\n'
+            f'💳 <b>Подписка «Лид-витрина» — {TARIFF_LABEL}, {TARIFF_PRICE}</b>\n\n'
             f'{PAYMENT_REQUISITES_TEXT}\n\n'
             f'⚠️ Обязательно укажите в комментарии к платежу ваш Telegram: <b>{username}</b>\n\n'
             f'После перевода я подключу подписку вручную в течение нескольких часов.'
@@ -395,8 +368,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username,
             offer="Да",
             status="⏳ Ожидает оплаты",
-            comment=f"Тариф: {tariff_name} ({price_usd}) — реквизиты отправлены, ждём перевод",
+            comment=f"Тариф: {TARIFF_LABEL} ({TARIFF_PRICE}) — реквизиты отправлены, ждём перевод",
         )
+        await _notify_owner(context, username, user_id, '💳 Нажал «Оплатить подписку» — отправлены реквизиты')
         return
 
     # ── Главное меню ─────────────────────────────────────────────────────────
