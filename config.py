@@ -38,7 +38,3 @@ class Config:
     TRIAL_WARN_DAYS: int = int(os.getenv("TRIAL_WARN_DAYS", "1"))
     SUBSCRIPTION_WARN_DAYS: int = int(os.getenv("SUBSCRIPTION_WARN_DAYS", "3"))
     SCHEDULER_HOUR: int = int(os.getenv("SCHEDULER_HOUR", "10"))  # UTC
-
-    # Pricing (legacy)
-    PRICE_REGULAR_USD: int = 19
-    PRICE_TRIAL_DISCOUNT_USD: int = 0
