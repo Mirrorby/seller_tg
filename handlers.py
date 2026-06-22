@@ -10,11 +10,6 @@ from telegram.ext import ContextTypes
 from gemini_client import gemini
 from sheets_client import sheets
 from config import Config
-from payment_manager import (
-    TARIFFS,
-    handle_lava_payment,
-    handle_crypto_payment,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +20,15 @@ TARIFF_DISPLAY = {
     '3m': ('3 месяца',  '$49', 49.0),
     '6m': ('6 месяцев', '$89', 89.0),
 }
+
+# ── Готовый текст с реквизитами для ручной оплаты ──────────────────────────
+PAYMENT_REQUISITES_TEXT = (
+    'Для оплаты подписки временно принимаются платежи только на российскую карту:\n\n'
+    '🏦 Т-Банк\n'
+    '+79183895663 — Никита К.\n\n'
+    'Или <a href="https://www.tinkoff.ru/rm/r_GdeMhajAnO.mypoLgkNKn/4VsMD20021">по ссылке</a>.\n\n'
+    'Для перевода по номеру карты напишите лично @Mirrorby_ru.'
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Состояния пользователей в памяти
@@ -54,10 +58,6 @@ def _typing_delay(text: str) -> float:
     return min(base + per_chr, 18.0)
 
 
-def _make_email(username: str) -> str:
-    """Синтетический email для Lava API."""
-    clean = username.lstrip("@").replace(" ", "_")
-    return f"{clean}@{Config.DEFAULT_EMAIL_DOMAIN}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -353,86 +353,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Намерение: оплатить ──────────────────────────────────────────────────
     if data == 'intent:pay':
         await query.edit_message_text(
-            '💳 <b>Выберите способ оплаты:</b>',
+            '📋 <b>Выберите тариф:</b>',
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton('💳 Оплата картой',  callback_data='paymethod:card_lava')],
-                [InlineKeyboardButton('🪙 Оплата криптой', callback_data='paymethod:crypto')],
-                [InlineKeyboardButton('↩️ Главное меню',   callback_data='menu:main')],
+                [InlineKeyboardButton('1 месяц — $19',          callback_data='tariff:1m')],
+                [InlineKeyboardButton('3 месяца — $49 (-14%)',  callback_data='tariff:3m')],
+                [InlineKeyboardButton('6 месяцев — $89 (-29%)', callback_data='tariff:6m')],
+                [InlineKeyboardButton('↩️ Главное меню',        callback_data='menu:main')],
             ]),
         )
         await _notify_owner(context, username, user_id, '💳 Нажал «Оплатить подписку»')
         return
 
-    # ── Выбор способа оплаты → показ тарифов ────────────────────────────────
-    if data.startswith('paymethod:'):
-        method = data.split(':')[1]
-        _user_state[user_id] = f'paymethod_chosen:{method}'
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton('1 месяц — $19',             callback_data=f'tariff:{method}:1m')],
-            [InlineKeyboardButton('3 месяца — $49 (-14%)',     callback_data=f'tariff:{method}:3m')],
-            [InlineKeyboardButton('6 месяцев — $89 (-29%)',    callback_data=f'tariff:{method}:6m')],
-            [InlineKeyboardButton('↩️ Назад',                  callback_data='intent:pay')],
-        ])
-
-        await query.edit_message_text(
-            '📋 <b>Выберите тариф:</b>',
-            parse_mode='HTML',
-            reply_markup=keyboard,
-        )
-        await _notify_owner(context, username, user_id, f'💳 Выбрал способ: {method}')
-        return
-
-    # ── Выбор тарифа ─────────────────────────────────────────────────────────
+    # ── Выбор тарифа → реквизиты банка для ручной оплаты ────────────────────
     if data.startswith('tariff:'):
-        parts  = data.split(':')
-        method = parts[1]
-        tariff_key = parts[2]
+        tariff_key = data.split(':')[1]
         tariff_name, price_usd, amount_usd = TARIFF_DISPLAY[tariff_key]
 
         await _notify_owner(
             context, username, user_id,
-            f'💰 Выбрал тариф: {tariff_name} | способ: {method}'
+            f'💰 Выбрал тариф: {tariff_name} ({price_usd}) — отправлены реквизиты'
         )
 
-        # ── Создаём инвойс ────────────────────────────────────────────────────
-        await query.edit_message_text('⏳ Создаю ссылку на оплату...')
-
-        try:
-            if method == 'crypto':
-                result_text = await handle_crypto_payment(
-                    username=username,
-                    tariff_key=tariff_key,
-                    tariff_name=tariff_name,
-                    amount_usd=amount_usd,
-                    context=context,
-                )
-            elif method == 'card_lava':
-                result_text = await handle_lava_payment(
-                    username=username,
-                    email=_make_email(username),
-                    tariff_key=tariff_key,
-                    tariff_name=tariff_name,
-                    amount_usd=amount_usd,
-                    context=context,
-                )
-            else:
-                result_text = '⚠️ Неизвестный способ оплаты.'
-        except Exception as e:
-            logger.error(f"Ошибка создания инвойса для {username}: {e}")
-            result_text = '⚠️ Ошибка при создании платежа. Попробуйте через несколько минут.'
+        result_text = (
+            f'💳 <b>Оплата тарифа «{tariff_name}» — {price_usd}</b>\n\n'
+            f'{PAYMENT_REQUISITES_TEXT}\n\n'
+            f'⚠️ Обязательно укажите в комментарии к платежу ваш Telegram: <b>{username}</b>\n\n'
+            f'После перевода я подключу подписку вручную в течение нескольких часов.'
+        )
 
         await query.edit_message_text(
             result_text,
             parse_mode='HTML',
-            disable_web_page_preview=False,
+            disable_web_page_preview=True,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton('↩️ Главное меню', callback_data='menu:main')],
             ]),
         )
 
-        sheets.upsert_client(username, offer="Да")
+        sheets.upsert_client(
+            username,
+            offer="Да",
+            status="⏳ Ожидает оплаты",
+            comment=f"Тариф: {tariff_name} ({price_usd}) — реквизиты отправлены, ждём перевод",
+        )
         return
 
     # ── Главное меню ─────────────────────────────────────────────────────────
