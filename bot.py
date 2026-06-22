@@ -16,7 +16,6 @@ from handlers import (
     handle_callback, handle_broadcast,
 )
 from scheduler import start_scheduler
-from webhook_server import set_bot_context, start_webhook_server
 from userbot import start_userbot, stop_userbot
 
 # ------------------------------------------------------------------ #
@@ -49,7 +48,6 @@ logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING)
 logging.getLogger("google.auth").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("aiohttp").setLevel(logging.WARNING)
 logging.getLogger("telethon.client.updates").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -62,33 +60,9 @@ async def post_init(application: Application) -> None:
     # Userbot для холодных контактов (Telethon, тот же event loop)
     asyncio.create_task(start_userbot())
 
-    # Webhook сервер для Lava
-    runner = await start_webhook_server()
-    application.bot_data["webhook_runner"] = runner
-
-    # Передаём bot в webhook_server
-    class _Ctx:
-        def __init__(self, bot):
-            self.bot = bot
-
-    set_bot_context(_Ctx(application.bot))
-
 
 async def post_shutdown(application: Application) -> None:
-    runner = application.bot_data.get("webhook_runner")
-    if runner:
-        await runner.cleanup()
-        logger.info("Webhook server остановлен")
-
     await stop_userbot()
-
-    # Закрыть aiohttp-сессии платёжных клиентов
-    try:
-        from crypto_client import crypto
-        from lava_client import lava
-        await asyncio.gather(crypto.close(), lava.close(), return_exceptions=True)
-    except Exception as e:
-        logger.error(f"Ошибка закрытия платёжных клиентов: {e}")
 
 
 async def error_handler(update, context) -> None:
