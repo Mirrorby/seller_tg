@@ -741,5 +741,34 @@ class SheetsClient:
         except Exception as e:
             logger.error(f"mark_cold_trial error (user_id={user_id}): {e}")
 
+    def get_cold_contact_result(self, user_id) -> str:
+        """
+        Читает колонку G «Результат» для user_id из листа «Риэлторы».
+        Возвращает строку состояния или "" если пусто / не найдено.
+        """
+        try:
+            row = self._leads_find_row(user_id)
+            if row is None:
+                return ""
+            val = self.leads.cell(row, COLD_COL_RESULT).value
+            return (val or "").strip()
+        except Exception as e:
+            logger.error(f"get_cold_contact_result error (user_id={user_id}): {e}")
+            return ""
+
+    def update_cold_result(self, user_id, value: str):
+        """
+        Записывает произвольное значение в колонку G «Результат»
+        (используется для хранения состояния диалога).
+        """
+        try:
+            row = self._leads_find_row(user_id)
+            if row is None:
+                logger.warning(f"update_cold_result: user_id={user_id} не найден")
+                return
+            self.leads.update_cell(row, COLD_COL_RESULT, value)
+            logger.info(f"📝 Холодный state → '{value}' для user_id={user_id}")
+        except Exception as e:
+            logger.error(f"update_cold_result error (user_id={user_id}): {e}")
 
 sheets = SheetsClient()
